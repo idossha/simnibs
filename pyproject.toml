@@ -25,6 +25,10 @@ dependencies = [
   "jsonschema",
   # "matplotlib",
   "mkl ; sys_platform != 'darwin'",
+  # >=1.6: earlier versions use the legacy ">a" dtype in their FIFF string
+  # writer (mne/io/write.py), which numpy>=2 no longer accepts (NEP 55).
+  # The crash surfaces when writing -fwd.fif from prepare_eeg_forward.
+  "mne>=1.6",
   "nibabel",
   "numba",
   "numpy>=2",
