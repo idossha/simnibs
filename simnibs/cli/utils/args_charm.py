@@ -60,6 +60,18 @@ surfaces = CommandLineArgument(
         help="Create central cortical surfaces from the label image",
     ),
 )
+seeg = CommandLineArgument(
+    ["--seeg"],
+    dict(
+        default=None,
+        metavar="SPEC.json",
+        help="""Optional: path to a JSON spec describing implanted sEEG depth
+                electrodes (leads with entry/target coordinates + geometry). When
+                supplied, the mesh step embeds native sEEG contact/shaft/glial-sheath
+                compartments (tags 13/14/15) into the head mesh; the electrode region
+                is locally upsampled for a smooth rod. Off by default.""",
+    ),
+)
 forcerun = CommandLineArgument(
     ["--forcerun"],
     dict(

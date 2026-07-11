@@ -1,5 +1,6 @@
 import glob
 import itertools
+import json
 import logging
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ def run(
     fs_dir=None,
     options_str=None,
     debug=False,
+    seeg=None,
 ):
     """charm pipeline
 
@@ -460,6 +462,35 @@ def run(
         if num_threads <= 0:
             num_threads = 32
 
+        # --- optional sEEG electrodes (native, off unless a --seeg spec is supplied) ---
+        # Paints contact/shaft/glial-sheath compartments (tags 13/14/15) into the label and
+        # adds a fine element size for them; the tissue mesh is otherwise built exactly as
+        # native SimNIBS. No-op when seeg is None.
+        seeg_result = None
+        if seeg is not None:
+            from simnibs.simulation.seeg.charm_hook import apply_seeg_to_label
+
+            logger.info(f"Embedding sEEG electrodes from spec: {seeg}")
+            seeg_result = apply_seeg_to_label(
+                label_buffer,
+                label_affine,
+                seeg,
+                elem_sizes=elem_sizes,
+                facet_distances=facet_distances,
+                hierarchy=hierarchy,
+            )
+            label_buffer = seeg_result.label_buffer
+            label_affine = seeg_result.label_affine
+            elem_sizes = seeg_result.elem_sizes
+            facet_distances = seeg_result.facet_distances
+            hierarchy = seeg_result.hierarchy
+            logger.info(
+                "sEEG: %d lead(s), sheath %.0f um; painted voxels %s",
+                len(seeg_result.leads),
+                seeg_result.sheath_thickness_mm * 1000,
+                seeg_result.voxel_counts,
+            )
+
         final_mesh = create_mesh(
             label_buffer,
             label_affine,
@@ -485,7 +516,18 @@ def run(
         logger.info("Writing mesh")
         write_msh(final_mesh, sub_files.fnamehead)
         v = final_mesh.view(cond_list=cond_utils.standard_cond(), add_logo=True)
+        if seeg_result is not None:
+            # give the sEEG contact/shaft/sheath their own toggleable coloured Gmsh views
+            from simnibs.simulation.seeg.seeg_views import add_seeg_views
+
+            add_seeg_views(v, final_mesh, sub_files.fnamehead)
         v.write_opt(sub_files.fnamehead)
+
+        if seeg_result is not None:
+            seeg_json = os.path.splitext(sub_files.fnamehead)[0] + "_seeg.json"
+            with open(seeg_json, "w") as fh:
+                json.dump(seeg_result.sidecar(), fh, indent=2)
+            logger.info(f"Wrote sEEG provenance: {seeg_json}")
 
         logger.info("Transforming EEG positions")
         idx = final_mesh.elm.get_triangles(skin_tag)

@@ -528,14 +528,21 @@ class View(object):
             add = "View[%d]." % self.indx
 
         if self.ColorTable is not None:
-            st = add + "ColorTable = {0};\n".format(self._color_table_string())
-            string += st
+            # ColormapNumber selects a built-in colormap and would override an explicit
+            # ColorTable, so it is skipped when a ColorTable is given.
             exclude += ["ColormapNumber"]
 
         for k, v in self.__dict__.items():
             if k not in exclude:
                 st = add + "{0} = {1};\n".format(k, v)
                 string += st
+
+        # ColorTable MUST be written LAST. In Gmsh, setting ColormapAlpha (or
+        # ColormapNumber) regenerates the colormap from scratch and wipes a previously
+        # assigned ColorTable, leaving the default (red). Emitting ColorTable after every
+        # colormap-affecting option preserves the custom colors.
+        if self.ColorTable is not None:
+            string += add + "ColorTable = {0};\n".format(self._color_table_string())
         return string
 
 

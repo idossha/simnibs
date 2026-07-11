@@ -74,6 +74,7 @@ MANUAL EDITING:
     add_argument(parser, args_charm.segment)
     add_argument(parser, args_charm.mesh)
     add_argument(parser, args_charm.surfaces)
+    add_argument(parser, args_charm.seeg)
     add_argument(parser, args_charm.forcerun)
     add_argument(parser, args_charm.skip_register_t2)
     add_argument(parser, args_charm.use_settings)
@@ -175,6 +176,7 @@ def main():
         args.fs_dir,
         " ".join(sys.argv[1:]),
         args.debug,
+        seeg=args.seeg,
     )
 
     # mesh vs mesh_image

@@ -41,6 +41,9 @@ class ElementTags(IntEnum):
     MUSCLE = 10
     CARTILAGE = 11
     FAT = 12
+    SEEG_CONTACT = 13
+    SEEG_SHAFT = 14
+    GLIAL_SHEATH = 15
     ELECTRODE_RUBBER_START = 100
     ELECTRODE_RUBBER = 100
     ELECTRODE_RUBBER_END = 499
@@ -63,6 +66,9 @@ class ElementTags(IntEnum):
     MUSCLE_TH_SURFACE = TH_SURFACE_START + MUSCLE
     CARTILAGE_TH_SURFACE = TH_SURFACE_START + CARTILAGE
     FAT_TH_SURFACE = TH_SURFACE_START + FAT
+    SEEG_CONTACT_TH_SURFACE = TH_SURFACE_START + SEEG_CONTACT
+    SEEG_SHAFT_TH_SURFACE = TH_SURFACE_START + SEEG_SHAFT
+    GLIAL_SHEATH_TH_SURFACE = TH_SURFACE_START + GLIAL_SHEATH
     INTERNAL_AIR_TH_SURFACE = TH_SURFACE_START + ELECTRODE_RUBBER_START - 1
 
     ELECTRODE_RUBBER_TH_SURFACE_START = TH_SURFACE_START + ELECTRODE_RUBBER_START
@@ -182,6 +188,9 @@ tissue_tags: list[int] = [
     ElementTags.MUSCLE,
     ElementTags.CARTILAGE,
     ElementTags.FAT,
+    ElementTags.SEEG_CONTACT,
+    ElementTags.SEEG_SHAFT,
+    ElementTags.GLIAL_SHEATH,
     ElementTags.ELECTRODE_RUBBER,
     ElementTags.SALINE,
 ]
@@ -199,6 +208,9 @@ tissue_names: dict[int, str] = {
     ElementTags.MUSCLE: "Muscle",
     ElementTags.CARTILAGE: "Cartilage",
     ElementTags.FAT: "Fat",
+    ElementTags.SEEG_CONTACT: "SEEG_contact",
+    ElementTags.SEEG_SHAFT: "SEEG_shaft",
+    ElementTags.GLIAL_SHEATH: "Glial_sheath",
     ElementTags.ELECTRODE_RUBBER: "Electrode_rubber",
     ElementTags.SALINE: "Saline",
 }
@@ -216,6 +228,9 @@ tissue_conductivities: dict[int, float] = {
     ElementTags.MUSCLE: 0.16,
     ElementTags.CARTILAGE: 0.88,
     ElementTags.FAT: 0.078,
+    ElementTags.SEEG_CONTACT: 1.0e6,
+    ElementTags.SEEG_SHAFT: 1.0e-5,
+    ElementTags.GLIAL_SHEATH: 0.10,
     ElementTags.ELECTRODE_RUBBER: 29.4,
     ElementTags.SALINE: 1.0,
 }
@@ -233,6 +248,9 @@ tissue_conductivity_descriptions: dict[int, str] = {
     ElementTags.MUSCLE: "Muscle (from Gabriel et al, 2009)",
     ElementTags.CARTILAGE: "Cartilage (average of values from Binette et al. 2004 and Morita et al. 2012)",
     ElementTags.FAT: "Fat (from Gabriel et al, 2009)",
+    ElementTags.SEEG_CONTACT: "sEEG metallic contact (Pt/Pt-Ir); equipotential-limit 1e6 S/m for FEM stability (Datta 2011; Lempka 2013)",
+    ElementTags.SEEG_SHAFT: "sEEG insulating shaft (polyurethane/silicone); near-insulator (physical ~1e-12 S/m)",
+    ElementTags.GLIAL_SHEATH: "peri-electrode glial/encapsulation sheath, resistive shell (Grill & Mortimer 1994; Butson 2006; Yousif 2008; Missey 2026 SI S7)",
     ElementTags.ELECTRODE_RUBBER: "for tDCS rubber electrodes",
     ElementTags.SALINE: "for tDCS sponge electrodes",
 }

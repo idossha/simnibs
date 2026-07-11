@@ -1,0 +1,82 @@
+{
+  "_meta": {
+    "description": "sEEG depth-electrode lookup catalog. Geometry in mm (spacing = contact centre-to-centre; shaft_dia = insulating body OD) drives element classification. contact_sigma_S_per_m / shaft_sigma_S_per_m are the PHYSICAL bulk conductivities, provided for reference only: all contacts share the single SEEG_contact tag, so the FEM conductivity is set by SEEGMaterials (default 1e6 S/m equipotential limit / 1e-5 S/m insulator), not per part number. Override globally via place_seeg(materials=SEEGMaterials(...)).",
+    "sources": "Ad-Tech Product Catalogue 2015; Goodfellow/CRC material data; Missey-2026 SI. See simnibs/simulation/seeg/README.md (R1).",
+    "schema": ["manufacturer", "family", "n_contacts", "contact_len_mm", "contact_dia_mm", "shaft_dia_mm", "spacing_mm", "contact_material", "shaft_material", "contact_sigma_S_per_m (informational)", "shaft_sigma_S_per_m (informational)", "microwires", "notes"]
+  },
+  "BF10R-SP21X-0C3": {
+    "manufacturer": "Ad-Tech",
+    "family": "Behnke-Fried hybrid (macro+microwire)",
+    "n_contacts": 10,
+    "contact_len_mm": 1.57,
+    "contact_dia_mm": 1.28,
+    "shaft_dia_mm": 1.28,
+    "spacing_mm": 5.0,
+    "contact_material": "Pt/Ir 90/10",
+    "shaft_material": "polyurethane",
+    "contact_sigma_S_per_m": 4.1e6,
+    "shaft_sigma_S_per_m": 1e-12,
+    "microwires": {"count": 9, "dia_um": 40, "material": "Pt/Ir", "recording": 8, "reference": 1, "protrusion_mm": [4, 5]},
+    "notes": "Study electrode family (R.AMY/R.HIPPO/R.OF). SP21X is an Ad-Tech BF build code, NOT 21 mm; spacing = 5 mm per electrode_config.json. Macros flush with shaft. Microwires (40 um) omitted from FEM geometry (~30x below mesh resolution)."
+  },
+  "RD10R-SP05X-000": {
+    "manufacturer": "Ad-Tech",
+    "family": "Reduced-Diameter Spencer probe",
+    "n_contacts": 10,
+    "contact_len_mm": 2.29,
+    "contact_dia_mm": 1.1,
+    "shaft_dia_mm": 1.1,
+    "spacing_mm": 5.0,
+    "contact_material": "platinum",
+    "shaft_material": "polyurethane",
+    "contact_sigma_S_per_m": 9.43e6,
+    "shaft_sigma_S_per_m": 1e-12,
+    "microwires": null,
+    "notes": "Study 'RD sEEG' type (R.STI, R.AT). SP##X = spacing in mm (3-8 offered)."
+  },
+  "SD10R-SP05X-000": {
+    "manufacturer": "Ad-Tech",
+    "family": "Spencer Depth probe",
+    "n_contacts": 10,
+    "contact_len_mm": 2.29,
+    "contact_dia_mm": 1.12,
+    "shaft_dia_mm": 1.12,
+    "spacing_mm": 5.0,
+    "contact_material": "platinum",
+    "shaft_material": "polyurethane",
+    "contact_sigma_S_per_m": 9.43e6,
+    "shaft_sigma_S_per_m": 1e-12,
+    "microwires": null,
+    "notes": "1.12 mm OD, 390 mm total; exposed contact 2.41 mm / recording 2.29 mm; spacing 5 mm (SP05X) or 10 mm (SP10X)."
+  },
+  "DIXI-Microdeep-D08-15AM": {
+    "manufacturer": "DIXI Medical",
+    "family": "Microdeep sEEG",
+    "n_contacts": 8,
+    "contact_len_mm": 2.0,
+    "contact_dia_mm": 0.8,
+    "shaft_dia_mm": 0.8,
+    "spacing_mm": 3.5,
+    "contact_material": "Pt/Ir",
+    "shaft_material": "polyurethane",
+    "contact_sigma_S_per_m": 4.1e6,
+    "shaft_sigma_S_per_m": 1e-12,
+    "microwires": null,
+    "notes": "European 0.8/2.0/3.5 mm standard. Secondary catalog entry (study uses Ad-Tech)."
+  },
+  "PMT-Depthalon-2102": {
+    "manufacturer": "PMT Corporation",
+    "family": "Depthalon sEEG",
+    "n_contacts": 8,
+    "contact_len_mm": 2.0,
+    "contact_dia_mm": 0.8,
+    "shaft_dia_mm": 0.8,
+    "spacing_mm": 3.5,
+    "contact_material": "platinum",
+    "shaft_material": "polyurethane",
+    "contact_sigma_S_per_m": 9.43e6,
+    "shaft_sigma_S_per_m": 1e-12,
+    "microwires": null,
+    "notes": "0.8 mm OD; contacts 1-2 mm; spacing 2.5/3.5/5 mm. Secondary catalog entry."
+  }
+}
