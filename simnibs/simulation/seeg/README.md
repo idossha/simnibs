@@ -73,9 +73,11 @@ charm --mesh ernie --seeg leads.json           # re-mesh an existing m2m_ernie
 The spec is **geometry only** — there is no `materials`/conductivity key. `charm` does
 segmentation + meshing and assigns the **default** sEEG conductivities; you set the sheath
 conductivity (and any sweep) at **simulation** time on the built mesh (§8). `sheath_thickness_um`
-is the one conductivity-adjacent knob that *is* a build input, because it is geometry — set it
-to e.g. `100` for a 100 µm sheath (sub-voxel sheaths are widened to ≥1 voxel and the default σ is
-sheet-resistance-corrected; the factor is recorded so your solve-time σ gets the same correction).
+is a geometry knob and *is* a build input — set it to e.g. `100` for a 100 µm sheath. The sheath
+is meshed at its **true thickness** and gets the real (default) σ; there is **no conductivity
+scaling** to fake a sub-voxel sheath. To resolve a thin sheath, set `label_voxel_mm` fine enough
+(the electrode is an analytic model, so a fine local label is legitimate); a sheath thinner than
+the voxel is warned and not meshed at true thickness.
 
 Only `leads` is required; everything else falls back to the study defaults in §6. charm
 writes the usual `ernie.msh` (now carrying tags 13-16) plus an `ernie_seeg.json`
@@ -214,7 +216,7 @@ from. Local PDFs are in [`references/`](references/); `[ext]` = cited without a 
 |---|---|---|---|---|
 | `sheath_thickness_um` | **150** | 100 – 500 | µm | [Missey 2026 SI Fig S7](references/Missey-2026.pdf) / [mmc1.docx](references/mmc1.docx) (150–300); DBS/FBR lit 250–500 `[ext]` |
 | encapsulation extent | **segmented by host** (`SHEATH_TAG_BY_HOST`): brain→glial, bone/scalp→fibrous, CSF→bare | custom via `sheath_tag_map` | — | no bare GM/WM; glial-scar decays <400 µm ≈ sheath ([Missey 2026](references/Missey-2026.pdf)); see §6.7 |
-| shell mesh thickness | max(1 voxel, `sheath/voxel`) | — | voxel | thin-shell equivalence: σ scaled ×(t_mesh/t_phys) to preserve sheet resistance t/σ |
+| shell mesh thickness | `round(sheath/voxel)` voxels, **true thickness** | — | voxel | no σ scaling; set `label_voxel_mm ≤ sheath` to resolve a thin sheath (down to ~50 µm) |
 
 ### 6.4 Reference tissue conductivities (SimNIBS, unchanged)
 
@@ -275,14 +277,17 @@ tag) is the richer opt-in.
 
 ## 7. Resolution & honest limits
 
-- **Electrode fidelity is bounded by `label_voxel_mm`** (a voxel mesher can't beat its label
-  staircase; RMS radial error ≈ ½·voxel). 0.25 mm → ~0.12 mm rod error.
-- **The 150 µm sheath is sub-voxel** on any tractable whole-head grid, so it is meshed as a
-  ≥1-voxel shell with σ scaled to preserve its sheet resistance (t/σ). This is a thin-shell
-  *electrical* equivalent, not a literal 150 µm layer. A true-thickness sheath needs
-  `preview_electrode` (standalone, 40 µm) or a surface-corefine route (staged).
+- **The sheath is meshed at its true thickness — never σ-scaled.** A voxel-rasterised sheath is
+  only resolved when `label_voxel_mm ≤ sheath` (a ~50 µm sheath needs a ~25–50 µm label); thinner
+  than the voxel it is warned and simply not resolved. There is deliberately **no conductivity
+  scaling** to compensate a coarse voxel — the fix is finer resolution, not a fake σ.
+- **Voxel-independent thin sheaths (down to ~50 µm)** are a geometry problem, not a σ problem: the
+  electrode is an analytic model, so it should be meshed from its surfaces (a whole-head 50 µm
+  *label* is infeasible). `preview_electrode` already meshes a standalone electrode at 40 µm; a
+  surface-conforming insertion into the head is the resolution-independent route (see the module
+  design notes).
 - **Cost:** native `create_mesh` preprocessing is voxel-bound — whole head at 0.25 mm ≈
-  90–120 min. Coarsen `label_voxel_mm` to trade electrode crispness for speed.
+  90–120 min. A fine `label_voxel_mm` (for a thin sheath) is only tractable on a local crop.
 
 ---
 
@@ -292,22 +297,22 @@ tag) is the richer opt-in.
   4.6** env (the seeg package symlinked into its site-packages; the three charm files patched
   with `.bak_preseeg` backups). Tags 13-16 self-register at runtime.
 - The `charm --seeg` path writes a `*_seeg.json` sidecar (leads, `sheath_thickness_mm`,
-  `thin_shell_scale`, default `materials`/`cond_list`, voxel counts, warnings) for provenance.
+  default `materials`/`cond_list`, voxel counts, warnings) for provenance.
 - **Build vs solve.** `charm --seeg` only segments + meshes and assigns the **default** sEEG
-  conductivities (thin-shell-corrected for the meshed sheath thickness). **Conductivity is set at
-  simulation time** on the built mesh — that is where any σ sweep lives; never rebuild to change σ.
+  conductivities. **Conductivity is set at simulation time** on the built mesh — that is where any
+  σ sweep lives; never rebuild to change σ.
 - **Solve with the default σ** — feed the sidecar's ready `cond_list` (the static `standard_cond()`
-  would miss the thin-shell correction):
+  would miss the segmented fibrous tag):
 
   ```python
   from simnibs.simulation.seeg import load_seeg_cond_list
-  cl = load_seeg_cond_list("ernie_seeg.json")            # default σ, thin-shell-corrected
+  cl = load_seeg_cond_list("ernie_seeg.json")            # default σ
   for i, v in enumerate(cl):
       tdcslist.cond[i].value = v                          # tags 13-16
   ```
 
-- **Sweep σ at solve time** — pass your own `materials`; the sheath σ gets the same recorded
-  thin-shell correction, and you re-solve the *same* mesh (no rebuild):
+- **Sweep σ at solve time** — pass your own `materials` (used as given, no scaling) and re-solve
+  the *same* mesh (no rebuild):
 
   ```python
   from simnibs.simulation.seeg import load_seeg_cond_list, SEEGMaterials

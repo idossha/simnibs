@@ -171,10 +171,11 @@ def paint_leads_into_label(
             host_lut[host] = tag
     counts = {SEEG_CONTACT: 0, SEEG_SHAFT: 0, GLIAL_SHEATH: 0, FIBROUS_SHEATH: 0}
 
-    # sheath shell thickness in whole voxels (>=1 so it is a *consistent*, gap-free shell)
+    # sheath shell thickness in whole voxels, at TRUE thickness -- NOT forced to >=1. A sheath
+    # thinner than ~half a voxel rounds to 0 and is not painted (the caller warns); it is never
+    # widened to a voxel, because there is no conductivity scaling to compensate -- resolve a
+    # thin sheath with a finer label voxel instead.
     n_sheath = int(round(max(0.0, sheath_mm) / voxel)) if sheath_mm > 0 else 0
-    if sheath_mm > 0:
-        n_sheath = max(1, n_sheath)
 
     for lead in leads:
         spec = catalog[lead.part_number]

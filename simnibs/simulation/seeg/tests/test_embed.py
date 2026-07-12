@@ -35,7 +35,8 @@ def test_conforming_presets_fidelity_ladder():
 # --------------------------------------------------------------------------- #
 # rasteriser (pure numpy)
 # --------------------------------------------------------------------------- #
-def _block(n=100, vox=0.3):
+def _block(n=220, vox=0.15):
+    # voxel fine enough to resolve a 150 um sheath at true thickness (no widening): 0.15/0.15 = 1
     lab = np.zeros((n, n, n), np.uint8)
     lab[8:-8, 8:-8, 8:-8] = 2  # GM block
     aff = np.eye(4); aff[0, 0] = aff[1, 1] = aff[2, 2] = vox; aff[:3, 3] = -vox * n / 2
@@ -55,8 +56,12 @@ def test_paint_constant_radius_rod():
     spec = ElectrodeCatalog.default()["BF10R-SP21X-0C3"]
     bar_body = np.argwhere(np.isin(out, [13, 14]))
     P = (aff[:3, :3] @ bar_body.T + aff[:3, 3, None]).T
-    from simnibs.simulation.seeg.geometry import perp_distance_and_axial
-    d, _ = perp_distance_and_axial(P, lead.A, lead.B)
+    # radial distance to the (infinite) electrode axis line -- the constant-radius check must be
+    # purely radial, unaffected by the entry-extended shaft running past the original entry.
+    u = lead.axis_unit()
+    rel = P - lead.A
+    axial = rel @ u
+    d = np.linalg.norm(rel - np.outer(axial, u), axis=1)
     assert d.max() <= spec.body_radius_mm + aff[0, 0]     # within one voxel of the body radius
 
 

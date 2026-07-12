@@ -2,8 +2,8 @@
 
 The hook is pure-numpy (label painting + settings augmentation); no CGAL, so these run
 anywhere and fast. They lock the contract that charm_main.run relies on:
-tissue settings untouched, electrode finely sized, electrode-first hierarchy, sheath
-thin-shell equivalence, and a JSON round-trip.
+tissue settings untouched, electrode finely sized, electrode-first hierarchy, default
+(unscaled) conductivities, and a JSON round-trip.
 """
 
 from __future__ import annotations
@@ -121,15 +121,15 @@ def test_hook_upsamples_label_to_fidelity_voxel():
     assert {13, 14, 15}.issubset(set(np.unique(r.label_buffer).tolist()))
 
 
-def test_hook_subvoxel_sheath_widens_and_records_scale():
+def test_hook_subvoxel_sheath_warns_no_scaling():
     lab, aff = _gm_block()
     r = apply_seeg_to_label(lab, aff, _spec(sheath_thickness_um=150, label_voxel_mm=0.25),
                             elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET)
-    # 150 um sheath < 250 um voxel -> widened to 1 voxel; DEFAULT sigma scaled by 250/150 to
-    # keep t/sigma, and the factor is recorded so a solve-time sigma can get the same correction
-    assert r.thin_shell_scale == pytest.approx(0.25 / 0.15, rel=1e-3)
-    assert r.materials.sheath_sigma == pytest.approx(0.05 * 0.25 / 0.15, rel=1e-3)  # default, corrected
-    assert any("preserves t/sigma" in w for w in r.warnings)
+    # 150 um sheath < 250 um voxel -> warned, and sigma is the DEFAULT, UNSCALED (no compensation)
+    assert r.materials.sheath_sigma == pytest.approx(0.05)
+    assert r.materials.fibrous_sheath_sigma == pytest.approx(0.16)
+    assert not hasattr(r, "thin_shell_scale")
+    assert any("true thickness" in w for w in r.warnings)
 
 
 def test_load_spec_materials_ignored_by_hook_uses_defaults():
@@ -137,8 +137,7 @@ def test_load_spec_materials_ignored_by_hook_uses_defaults():
     lab, aff = _gm_block()
     r = apply_seeg_to_label(lab, aff, _spec(materials={"sheath_sigma": 0.99}, label_voxel_mm=0.25),
                             elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET)
-    # default 0.05 (thin-shell-corrected), NOT 0.99
-    assert r.materials.sheath_sigma == pytest.approx(0.05 * 0.25 / 0.15, rel=1e-3)
+    assert r.materials.sheath_sigma == pytest.approx(0.05)   # default, NOT 0.99, NOT scaled
 
 
 def test_hook_sidecar_roundtrips():
@@ -152,8 +151,8 @@ def test_hook_sidecar_roundtrips():
 
 
 def test_hook_sidecar_default_cond_and_solvetime_override():
-    """charm records DEFAULT (thin-shell-corrected) sigma + the scale factor; a solve-time
-    sigma passed to load_seeg_cond_list gets the same correction."""
+    """charm records the DEFAULT sigma (no scaling); a solve-time sigma passed to
+    load_seeg_cond_list is used verbatim (the sheath is meshed at true thickness)."""
     from simnibs.simulation.seeg.conductivity import load_seeg_cond_list
     from simnibs.simulation.seeg._params import SEEGMaterials
 
@@ -161,15 +160,14 @@ def test_hook_sidecar_default_cond_and_solvetime_override():
     r = apply_seeg_to_label(lab, aff, _spec(sheath_thickness_um=150, label_voxel_mm=0.25),
                             elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET)
     sc = json.loads(json.dumps(r.sidecar()))
-    scale = 0.25 / 0.15
-    assert sc["thin_shell_scale"] == pytest.approx(scale, rel=1e-3)
-    # default cond_list = default sigma, corrected
-    assert sc["cond_list"][GLIAL_SHEATH - 1] == pytest.approx(0.05 * scale, rel=1e-3)
+    assert "thin_shell_scale" not in sc
+    # default cond_list = default sigma, unscaled
+    assert sc["cond_list"][GLIAL_SHEATH - 1] == pytest.approx(0.05)
     assert sc["cond_list"][SEEG_CONTACT - 1] == pytest.approx(1e6)
-    assert load_seeg_cond_list(sc)[GLIAL_SHEATH - 1] == pytest.approx(0.05 * scale, rel=1e-3)
-    # solve-time override: a chosen sheath sigma gets the recorded thin-shell correction
+    assert load_seeg_cond_list(sc)[GLIAL_SHEATH - 1] == pytest.approx(0.05)
+    # solve-time override: the chosen sheath sigma is used as given (no scaling)
     cl = load_seeg_cond_list(sc, materials=SEEGMaterials(sheath_sigma=0.10))
-    assert cl[GLIAL_SHEATH - 1] == pytest.approx(0.10 * scale, rel=1e-3)
+    assert cl[GLIAL_SHEATH - 1] == pytest.approx(0.10)
 
 
 def test_hook_preserves_custom_hierarchy():

@@ -161,22 +161,17 @@ def build_conforming_head(
                f"use a finer label_voxel_mm (CONF_ULTRA) for a rounder rod.")
         logger.warning(msg); warnings.append(msg)
 
-    # Sheath consistency: a sub-voxel sheath paints intermittently (inconsistent). Grow the
-    # meshed sheath to >=1 voxel so it is a CONSISTENT annulus, keeping the sheet resistance
-    # R_s = t/sigma by scaling sigma with the thickened t (thin-shell equivalence).
-    paint_sheath_mm = sheath_mm
+    # Sheath resolution guard (geometry only; NO conductivity scaling): the sheath is meshed
+    # at its true thickness. If it is thinner than the voxel it cannot be resolved -- use a
+    # finer label_voxel_mm rather than faking it.
     if sheath_mm > 0 and sheath_mm < dv:
-        paint_sheath_mm = float(dv)
-        scale = paint_sheath_mm / sheath_mm
-        materials = materials.with_scaled_sheath(scale)   # keep both shells' t/sigma constant
-        msg = (f"sheath {sheath_mm*1000:.0f} um < voxel {dv*1000:.0f} um: meshed at "
-               f"1 voxel with sigma scaled x{scale:.2f} (preserves t/sigma). For a "
-               f"true-thickness sheath use preview_electrode / the surface route.")
+        msg = (f"sheath {sheath_mm*1000:.0f} um < voxel {dv*1000:.0f} um: cannot be meshed at "
+               f"true thickness -- set label_voxel_mm <= {sheath_mm*1000:.0f} um.")
         logger.warning(msg); warnings.append(msg)
 
     # --- paint the electrodes into the real tissue label ---
     label, vox_counts = _raster.paint_leads_into_label(
-        label, affine, leads, catalog, paint_sheath_mm,
+        label, affine, leads, catalog, sheath_mm,
         displace_tags=displace_tags, sheath_tag_map=sheath_tag_map,
     )
     logger.info("sEEG conforming: painted voxels %s", vox_counts)

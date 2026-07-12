@@ -80,18 +80,16 @@ def load_seeg_cond_list(sidecar, materials: "SEEGMaterials | None" = None) -> li
     """Return the ``cond_list[tag-1]`` vector to solve a ``charm --seeg`` mesh with.
 
     This is where the sEEG conductivity is set -- at *simulation* time (charm itself only
-    segments + meshes and assigns default, thin-shell-corrected sigma). ``sidecar`` is the
-    ``*_seeg.json`` path (or loaded dict) written next to the mesh::
+    segments + meshes and assigns the default sigma). ``sidecar`` is the ``*_seeg.json`` path
+    (or loaded dict) written next to the mesh::
 
         from simnibs.simulation.seeg import load_seeg_cond_list
         cl = load_seeg_cond_list("ernie_seeg.json")          # charm's default sigma
         for i, v in enumerate(cl):
             tdcs.cond[i].value = v                           # tags 13-16 carry sigma
 
-    Pass ``materials`` to solve with a *different* sheath sigma (e.g. a sweep): its two sheath
-    conductivities are multiplied by the sidecar's ``thin_shell_scale`` (the same sheet-
-    resistance correction charm applied to its defaults), so the meshed-thicker-than-physical
-    sheath still models the sigma you intend::
+    Pass ``materials`` to solve with a *different* sheath sigma (e.g. a sweep) -- no scaling is
+    applied; the sheath is meshed at true thickness, so the sigma is used as given::
 
         cl = load_seeg_cond_list("ernie_seeg.json",
                                  materials=SEEGMaterials(fibrous_sheath_sigma=0.30))
@@ -105,12 +103,8 @@ def load_seeg_cond_list(sidecar, materials: "SEEGMaterials | None" = None) -> li
     if not isinstance(sidecar, dict):
         raise TypeError(f"sidecar must be a path or dict, got {type(sidecar).__name__}")
 
-    scale = float(sidecar.get("thin_shell_scale", 1.0) or 1.0)
-
     if materials is not None:
-        corrected = materials.with_scaled_sheath(scale) if scale != 1.0 else materials
-        _warn_if_sheath_not_resistive(corrected, scale)
-        return build_seeg_cond_list(materials=corrected)
+        return build_seeg_cond_list(materials=materials)
 
     cl = sidecar.get("cond_list")
     if cl is not None:
@@ -124,24 +118,3 @@ def load_seeg_cond_list(sidecar, materials: "SEEGMaterials | None" = None) -> li
         fibrous_sheath_sigma=float(mats.get("16", SEEGMaterials.fibrous_sheath_sigma)),
     )
     return build_seeg_cond_list(materials=recorded)
-
-
-# grey-matter conductivity (tag 2); the glial-sheath enhancement mechanism assumes sheath < GM
-_GM_SIGMA = 0.275
-
-
-def _warn_if_sheath_not_resistive(materials: "SEEGMaterials", scale: float) -> None:
-    """Warn (logging) if the thin-shell-corrected GLIAL sheath sigma is no longer < GM.
-
-    The near-contact enhancement needs a resistive glial shell; if a large sub-voxel widening
-    (scale) pushes the corrected sigma up to grey matter, the shell shorts tangentially and
-    blunts the effect -- solve on a finer-voxel mesh instead. (The fibrous sheath is a shunt by
-    design and is not checked.)"""
-    import logging
-    if materials.sheath_sigma >= _GM_SIGMA:
-        logging.getLogger("simnibs.seeg").warning(
-            "thin-shell-corrected glial sheath sigma %.3f S/m (x%.2f) >= GM %.3f: the widened "
-            "shell is no longer resistive and will blunt the near-contact enhancement; mesh the "
-            "sheath at a finer label_voxel_mm (>=2 voxels across it).",
-            materials.sheath_sigma, scale, _GM_SIGMA,
-        )

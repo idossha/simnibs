@@ -86,20 +86,6 @@ class SEEGMaterials:
             FIBROUS_SHEATH: self.fibrous_sheath_sigma,
         }
 
-    def with_scaled_sheath(self, scale: float) -> "SEEGMaterials":
-        """Copy with BOTH sheath conductivities multiplied by ``scale``.
-
-        Used when a sub-voxel sheath is meshed thicker than physical: scaling sigma by
-        (t_mesh / t_phys) preserves each shell's sheet resistance t/sigma (thin-shell
-        equivalence). Contact/shaft are unchanged.
-        """
-        return SEEGMaterials(
-            contact_sigma=self.contact_sigma,
-            shaft_sigma=self.shaft_sigma,
-            sheath_sigma=self.sheath_sigma * scale,
-            fibrous_sheath_sigma=self.fibrous_sheath_sigma * scale,
-        )
-
 
 # Convenient named variants for the sweep (R2 §0). NOTE: the module default (SEEGMaterials(),
 # README §6.2) is 0.05 S/m == MATERIALS_DENSE; MATERIALS_CHRONIC (0.10) is the chronic-scar

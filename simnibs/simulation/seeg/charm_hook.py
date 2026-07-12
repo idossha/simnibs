@@ -53,8 +53,10 @@ class SeegSpec:
 
     charm does segmentation + meshing; it does not take conductivities. The tags are meshed
     and registered with the *default* sEEG conductivities; the sheath conductivity (and any
-    sweep) is a simulation-time input, set on the built mesh at solve time (see the sidecar's
-    ``thin_shell_scale`` and ``load_seeg_cond_list``).
+    sweep) is a simulation-time input, set on the built mesh at solve time (see
+    ``load_seeg_cond_list``). The sheath is meshed at its true ``sheath_thickness_um`` -- resolve
+    it with a fine enough ``label_voxel_mm`` (there is no conductivity scaling to fake a
+    sub-voxel sheath).
     """
 
     leads: list[SEEGLead]
@@ -150,23 +152,19 @@ class SeegHookResult:
     elem_sizes: dict
     facet_distances: dict
     hierarchy: tuple
-    materials: SEEGMaterials              # DEFAULT sEEG conductivities, thin-shell-corrected
+    materials: SEEGMaterials              # DEFAULT sEEG conductivities (no scaling)
     leads: list[SEEGLead]
-    sheath_thickness_mm: float            # physical sheath thickness requested (geometry)
-    thin_shell_scale: float = 1.0         # meshed / physical sheath thickness (>=1 when sub-voxel)
+    sheath_thickness_mm: float            # sheath thickness requested (geometry)
     voxel_counts: dict[int, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def sidecar(self) -> dict:
         """JSON-serialisable provenance written next to the mesh.
 
-        charm assigns the **default** sEEG conductivities, thin-shell-corrected for the meshed
-        sheath thickness. ``cond_list`` is the ready-to-use ``cond_list[tag-1]`` vector for
-        those defaults (feed it via
-        :func:`~simnibs.simulation.seeg.conductivity.load_seeg_cond_list`). To use a *different*
-        sheath sigma at simulation time, multiply it by ``thin_shell_scale`` (the same
-        sheet-resistance correction charm applied to the defaults), or pass your ``materials``
-        to ``load_seeg_cond_list`` which does it for you.
+        charm assigns the **default** sEEG conductivities (no scaling). ``cond_list`` is the
+        ready-to-use ``cond_list[tag-1]`` vector for those defaults (feed it via
+        :func:`~simnibs.simulation.seeg.conductivity.load_seeg_cond_list`); pass your own
+        ``materials`` to that helper to solve/sweep a different sheath sigma.
         """
         return {
             "leads": [
@@ -180,7 +178,6 @@ class SeegHookResult:
                 for ld in self.leads
             ],
             "sheath_thickness_mm": self.sheath_thickness_mm,
-            "thin_shell_scale": self.thin_shell_scale,
             "materials": self.materials.as_tag_map(),
             "cond_list": build_seeg_cond_list(materials=self.materials),
             "voxel_counts": {int(k): int(v) for k, v in self.voxel_counts.items()},
@@ -234,7 +231,6 @@ def apply_seeg_to_label(
     materials = SEEGMaterials()          # charm assigns the DEFAULT conductivities (no spec sigma)
     resolution = spec.resolution
     sheath_mm = max(0.0, spec.sheath_thickness_um) / 1000.0
-    thin_shell_scale = 1.0
     warnings: list[str] = []
 
     # --- upsample charm's label to the electrode-fidelity voxel size ---
@@ -255,27 +251,19 @@ def apply_seeg_to_label(
                f"use a smaller label_voxel_mm for a rounder rod.")
         logger.warning(msg); warnings.append(msg)
 
-    # --- sheath widening for sub-voxel sheaths (geometry) + thin-shell sigma correction ---
-    # A sub-voxel sheath (e.g. a 100 um sheath on a 250 um label) cannot be meshed at true
-    # thickness, so it is WIDENED to >=1 voxel and the DEFAULT sigma is scaled by
-    # (meshed / physical) to preserve the shell's sheet resistance t/sigma. The scale is
-    # recorded (thin_shell_scale) so a *different* sigma chosen at simulation time can get the
-    # same correction. charm still assigns only the default (corrected) conductivities.
-    paint_sheath_mm = sheath_mm
+    # --- sheath resolution guard (geometry only; NO conductivity scaling) ---
+    # The sheath is meshed at its true thickness. If it is thinner than the label voxel it
+    # cannot be resolved -- the sheath conductivity is NEVER scaled to fake it; use a finer
+    # label_voxel_mm (or a surface-conforming build) to mesh a true sub-voxel sheath.
     if 0.0 < sheath_mm < dv:
-        paint_sheath_mm = float(dv)
-        thin_shell_scale = paint_sheath_mm / sheath_mm
-        materials = materials.with_scaled_sheath(thin_shell_scale)
-        msg = (f"sheath {sheath_mm * 1000:.0f} um < voxel {dv * 1000:.0f} um: widened to 1 "
-               f"voxel, default sigma x{thin_shell_scale:.2f} (preserves t/sigma; recorded as "
-               f"thin_shell_scale). Use a finer label_voxel_mm for a true-thickness sheath.")
+        msg = (f"sheath {sheath_mm * 1000:.0f} um < label voxel {dv * 1000:.0f} um: it cannot "
+               f"be meshed at true thickness -- set label_voxel_mm <= {sheath_mm * 1000:.0f} um "
+               f"(the electrode is an analytic model, so a fine label is legitimate).")
         logger.warning(msg); warnings.append(msg)
-        # (The "corrected sigma >= GM blunts the enhancement" check is a conductivity concern
-        # and now lives in load_seeg_cond_list, applied at simulation time.)
 
     # --- paint the electrodes into the real tissue label (no background block) ---
     label, vox_counts = _raster.paint_leads_into_label(
-        label, affine, spec.leads, catalog, paint_sheath_mm,
+        label, affine, spec.leads, catalog, sheath_mm,
         displace_tags=displace_tags, sheath_tag_map=sheath_tag_map,
     )
     logger.info("sEEG: painted voxels %s", vox_counts)
@@ -298,7 +286,7 @@ def apply_seeg_to_label(
     # when one was supplied (charm's default is falsy -> the native SEEG_HIERARCHY).
     resolved_hierarchy = SEEG_HIERARCHY if not hierarchy else (*SEEG_TAGS, *hierarchy)
 
-    # --- register the default (thin-shell-corrected) conductivities for the stock solver ---
+    # --- register the default conductivities for the stock solver ---
     ensure_seeg_registered(materials)
 
     return SeegHookResult(
@@ -310,7 +298,6 @@ def apply_seeg_to_label(
         materials=materials,
         leads=list(spec.leads),
         sheath_thickness_mm=sheath_mm,
-        thin_shell_scale=thin_shell_scale,
         voxel_counts={int(k): int(v) for k, v in vox_counts.items()},
         warnings=warnings,
     )

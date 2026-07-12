@@ -170,19 +170,14 @@ def test_native_sheath_sigma_matches_module_default():
 
 
 def test_segmented_materials_carry_fibrous_tag():
-    """The fibrous sheath (tag 16) is a first-class material: in as_tag_map, scaled by
-    with_scaled_sheath alongside the glial sheath, and present in the solver cond_list."""
+    """The fibrous sheath (tag 16) is a first-class material: in as_tag_map and the solver
+    cond_list, used verbatim (no conductivity scaling)."""
     from simnibs.simulation.seeg.conductivity import build_seeg_cond_list
     m = SEEGMaterials()
     tm = m.as_tag_map()
     assert tm[GLIAL_SHEATH] == pytest.approx(0.05)
     assert tm[FIBROUS_SHEATH] == pytest.approx(0.16)
-    # sub-voxel scaling scales BOTH sheaths, leaves contact/shaft untouched
-    s = m.with_scaled_sheath(2.0)
-    assert s.sheath_sigma == pytest.approx(0.10)
-    assert s.fibrous_sheath_sigma == pytest.approx(0.32)
-    assert s.contact_sigma == m.contact_sigma and s.shaft_sigma == m.shaft_sigma
-    # cond_list carries the fibrous value at index tag-1
+    # cond_list carries the fibrous value at index tag-1, unscaled
     cl = build_seeg_cond_list(materials=SEEGMaterials(fibrous_sheath_sigma=0.2))
     assert cl[FIBROUS_SHEATH - 1] == pytest.approx(0.2)
     assert cl[GLIAL_SHEATH - 1] == pytest.approx(0.05)
