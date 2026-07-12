@@ -41,10 +41,6 @@ from . import _raster
 
 logger = logging.getLogger("simnibs.seeg")
 
-# Grey-matter conductivity (tag 2) -- the resistive-sheath enhancement mechanism assumes the
-# sheath stays *below* GM; used only to warn when sub-voxel sigma-scaling pushes it above.
-_GM_SIGMA = 0.275
-
 # Electrode-first hierarchy so the electrode/tissue interface keeps a clean 1013-1016 shell.
 # Single source of truth in _params (== meshing.create_mesh's native default with the sEEG
 # tags 13-16 prepended); aliased here for back-compat with importers/tests.
@@ -53,10 +49,15 @@ _HIERARCHY = SEEG_HIERARCHY
 
 @dataclass
 class SeegSpec:
-    """Parsed ``--seeg`` specification (leads + optional geometry/material overrides)."""
+    """Parsed ``--seeg`` specification: leads + sheath/mesh GEOMETRY only.
+
+    charm does segmentation + meshing; it does not take conductivities. The tags are meshed
+    and registered with the *default* sEEG conductivities; the sheath conductivity (and any
+    sweep) is a simulation-time input, set on the built mesh at solve time (see the sidecar's
+    ``thin_shell_scale`` and ``load_seeg_cond_list``).
+    """
 
     leads: list[SEEGLead]
-    materials: SEEGMaterials = field(default_factory=SEEGMaterials)
     sheath_thickness_um: float = 150.0
     resolution: ConformingResolution = CONF_FINE
     catalog: ElectrodeCatalog | None = None
@@ -76,15 +77,16 @@ def load_seeg_spec(spec) -> SeegSpec:
              "entry_mm": [x, y, z], "target_mm": [x, y, z],
              "n_contacts": 5, "first_contact_depth_mm": 2.0}
           ],
-          "sheath_thickness_um": 150,        # optional (default 150)
+          "sheath_thickness_um": 150,        # optional (default 150); sheath GEOMETRY, e.g. 100
           "label_voxel_mm": 0.25,            # optional (electrode geometric fidelity)
           "electrode_edge_mm": 0.12,         # optional (fine tet size at the electrode)
           "electrode_facet_distance_mm": 0.03,
-          "materials": {"contact_sigma": 1e6, "shaft_sigma": 1e-5, "sheath_sigma": 0.05},
           "catalog": null                    # optional path to a custom electrode catalog
         }
 
-    Only ``leads`` is required; every other key falls back to the study defaults.
+    Only ``leads`` is required; every other key falls back to the study defaults. There is
+    deliberately NO ``materials`` / conductivity key: charm only segments + meshes and assigns
+    the default sEEG conductivities; set sheath sigma (and sweeps) at simulation time.
     """
     if isinstance(spec, (str, os.PathLike)):
         with open(spec) as fh:
@@ -114,15 +116,11 @@ def load_seeg_spec(spec) -> SeegSpec:
         except KeyError as e:
             raise ValueError(f"seeg lead {L.get('name', '?')!r} missing field {e}") from None
 
-    m = d.get("materials") or {}
-    materials = SEEGMaterials(
-        contact_sigma=float(m.get("contact_sigma", SEEGMaterials.contact_sigma)),
-        shaft_sigma=float(m.get("shaft_sigma", SEEGMaterials.shaft_sigma)),
-        sheath_sigma=float(m.get("sheath_sigma", SEEGMaterials.sheath_sigma)),
-        fibrous_sheath_sigma=float(
-            m.get("fibrous_sheath_sigma", SEEGMaterials.fibrous_sheath_sigma)
-        ),
-    )
+    if "materials" in d:
+        logger.warning(
+            "seeg spec 'materials' is ignored: charm assigns default sEEG conductivities; "
+            "set sheath sigma at simulation time (see load_seeg_cond_list)."
+        )
 
     resolution = ConformingResolution(
         label_voxel_mm=float(d.get("label_voxel_mm", CONF_FINE.label_voxel_mm)),
@@ -137,7 +135,6 @@ def load_seeg_spec(spec) -> SeegSpec:
     catalog = ElectrodeCatalog(d["catalog"]) if d.get("catalog") else None
     return SeegSpec(
         leads=leads,
-        materials=materials,
         sheath_thickness_um=float(d.get("sheath_thickness_um", 150.0)),
         resolution=resolution,
         catalog=catalog,
@@ -153,21 +150,23 @@ class SeegHookResult:
     elem_sizes: dict
     facet_distances: dict
     hierarchy: tuple
-    materials: SEEGMaterials
+    materials: SEEGMaterials              # DEFAULT sEEG conductivities, thin-shell-corrected
     leads: list[SEEGLead]
-    sheath_thickness_mm: float
+    sheath_thickness_mm: float            # physical sheath thickness requested (geometry)
+    thin_shell_scale: float = 1.0         # meshed / physical sheath thickness (>=1 when sub-voxel)
     voxel_counts: dict[int, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def sidecar(self) -> dict:
-        """JSON-serialisable summary written next to the mesh for provenance.
+        """JSON-serialisable provenance written next to the mesh.
 
-        ``cond_list`` is the ready-to-use, ``cond_list[tag-1]``-indexed conductivity vector
-        for the stock solver, carrying the *resolved* sEEG conductivities (including any
-        thin-shell sigma up-scaling). Feed it to run_simnibs via
-        :func:`~simnibs.simulation.seeg.conductivity.load_seeg_cond_list` so the spec's sheath
-        conductivity actually reaches the solve -- ``standard_cond()`` alone would fall back to
-        the static registry value and silently ignore both the per-spec sigma and the scaling.
+        charm assigns the **default** sEEG conductivities, thin-shell-corrected for the meshed
+        sheath thickness. ``cond_list`` is the ready-to-use ``cond_list[tag-1]`` vector for
+        those defaults (feed it via
+        :func:`~simnibs.simulation.seeg.conductivity.load_seeg_cond_list`). To use a *different*
+        sheath sigma at simulation time, multiply it by ``thin_shell_scale`` (the same
+        sheet-resistance correction charm applied to the defaults), or pass your ``materials``
+        to ``load_seeg_cond_list`` which does it for you.
         """
         return {
             "leads": [
@@ -181,6 +180,7 @@ class SeegHookResult:
                 for ld in self.leads
             ],
             "sheath_thickness_mm": self.sheath_thickness_mm,
+            "thin_shell_scale": self.thin_shell_scale,
             "materials": self.materials.as_tag_map(),
             "cond_list": build_seeg_cond_list(materials=self.materials),
             "voxel_counts": {int(k): int(v) for k, v in self.voxel_counts.items()},
@@ -231,9 +231,10 @@ def apply_seeg_to_label(
         spec = load_seeg_spec(spec)
 
     catalog = spec.resolved_catalog()
-    materials = spec.materials
+    materials = SEEGMaterials()          # charm assigns the DEFAULT conductivities (no spec sigma)
     resolution = spec.resolution
     sheath_mm = max(0.0, spec.sheath_thickness_um) / 1000.0
+    thin_shell_scale = 1.0
     warnings: list[str] = []
 
     # --- upsample charm's label to the electrode-fidelity voxel size ---
@@ -254,24 +255,23 @@ def apply_seeg_to_label(
                f"use a smaller label_voxel_mm for a rounder rod.")
         logger.warning(msg); warnings.append(msg)
 
+    # --- sheath widening for sub-voxel sheaths (geometry) + thin-shell sigma correction ---
+    # A sub-voxel sheath (e.g. a 100 um sheath on a 250 um label) cannot be meshed at true
+    # thickness, so it is WIDENED to >=1 voxel and the DEFAULT sigma is scaled by
+    # (meshed / physical) to preserve the shell's sheet resistance t/sigma. The scale is
+    # recorded (thin_shell_scale) so a *different* sigma chosen at simulation time can get the
+    # same correction. charm still assigns only the default (corrected) conductivities.
     paint_sheath_mm = sheath_mm
     if 0.0 < sheath_mm < dv:
         paint_sheath_mm = float(dv)
-        scale = paint_sheath_mm / sheath_mm
-        materials = materials.with_scaled_sheath(scale)  # keep both shells' sheet resistance t/sigma
-        msg = (f"sheath {sheath_mm * 1000:.0f} um < voxel {dv * 1000:.0f} um: meshed at 1 "
-               f"voxel with sigma x{scale:.2f} (preserves t/sigma). Use a finer "
-               f"label_voxel_mm for a true-thickness sheath.")
+        thin_shell_scale = paint_sheath_mm / sheath_mm
+        materials = materials.with_scaled_sheath(thin_shell_scale)
+        msg = (f"sheath {sheath_mm * 1000:.0f} um < voxel {dv * 1000:.0f} um: widened to 1 "
+               f"voxel, default sigma x{thin_shell_scale:.2f} (preserves t/sigma; recorded as "
+               f"thin_shell_scale). Use a finer label_voxel_mm for a true-thickness sheath.")
         logger.warning(msg); warnings.append(msg)
-        # The near-contact enhancement relies on a RESISTIVE shell (sheath sigma < GM). If the
-        # thin-shell up-scaling pushes it above GM, the thickened shell instead shorts current
-        # tangentially and blunts the very effect it models -- warn so the user drops the voxel.
-        if materials.sheath_sigma >= _GM_SIGMA:
-            msg = (f"scaled sheath sigma {materials.sheath_sigma:.3f} S/m >= GM {_GM_SIGMA} "
-                   f"S/m: the thickened shell is no longer resistive and will blunt the "
-                   f"near-contact enhancement. Use a finer label_voxel_mm (>=2 voxels across "
-                   f"the sheath) so no sigma up-scaling is needed.")
-            logger.warning(msg); warnings.append(msg)
+        # (The "corrected sigma >= GM blunts the enhancement" check is a conductivity concern
+        # and now lives in load_seeg_cond_list, applied at simulation time.)
 
     # --- paint the electrodes into the real tissue label (no background block) ---
     label, vox_counts = _raster.paint_leads_into_label(
@@ -298,7 +298,7 @@ def apply_seeg_to_label(
     # when one was supplied (charm's default is falsy -> the native SEEG_HIERARCHY).
     resolved_hierarchy = SEEG_HIERARCHY if not hierarchy else (*SEEG_TAGS, *hierarchy)
 
-    # --- register conductivities for the stock solver ---
+    # --- register the default (thin-shell-corrected) conductivities for the stock solver ---
     ensure_seeg_registered(materials)
 
     return SeegHookResult(
@@ -310,6 +310,7 @@ def apply_seeg_to_label(
         materials=materials,
         leads=list(spec.leads),
         sheath_thickness_mm=sheath_mm,
+        thin_shell_scale=thin_shell_scale,
         voxel_counts={int(k): int(v) for k, v in vox_counts.items()},
         warnings=warnings,
     )

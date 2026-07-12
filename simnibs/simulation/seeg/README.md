@@ -66,11 +66,16 @@ charm --mesh ernie --seeg leads.json           # re-mesh an existing m2m_ernie
   "sheath_thickness_um": 150,
   "label_voxel_mm": 0.25,
   "electrode_edge_mm": 0.12,
-  "electrode_facet_distance_mm": 0.03,
-  "materials": {"contact_sigma": 1e6, "shaft_sigma": 1e-5,
-                "sheath_sigma": 0.05, "fibrous_sheath_sigma": 0.16}
+  "electrode_facet_distance_mm": 0.03
 }
 ```
+
+The spec is **geometry only** — there is no `materials`/conductivity key. `charm` does
+segmentation + meshing and assigns the **default** sEEG conductivities; you set the sheath
+conductivity (and any sweep) at **simulation** time on the built mesh (§8). `sheath_thickness_um`
+is the one conductivity-adjacent knob that *is* a build input, because it is geometry — set it
+to e.g. `100` for a 100 µm sheath (sub-voxel sheaths are widened to ≥1 voxel and the default σ is
+sheet-resistance-corrected; the factor is recorded so your solve-time σ gets the same correction).
 
 Only `leads` is required; everything else falls back to the study defaults in §6. charm
 writes the usual `ernie.msh` (now carrying tags 13-16) plus an `ernie_seeg.json`
@@ -286,20 +291,30 @@ tag) is the richer opt-in.
 - The fork is an unbuilt source tree. Verification is done against the installed **SimNIBS
   4.6** env (the seeg package symlinked into its site-packages; the three charm files patched
   with `.bak_preseeg` backups). Tags 13-16 self-register at runtime.
-- The `charm --seeg` path writes a `*_seeg.json` sidecar (leads, materials, voxel counts,
-  warnings) next to the mesh for provenance.
-- To solve, feed `pl.mesh` + `pl.cond_list` (or the tagged `ernie.msh`) to the stock
-  `run_simnibs`; the new tags are already in `standard_cond()`.
-- **Getting the spec's sheath σ into the solve (native `charm --seeg` path).** `standard_cond()`
-  returns the *static* registry σ and cannot know either your per-spec `sheath_sigma` or the
-  thin-shell up-scaling applied when the sheath was sub-voxel. Use the sidecar's ready `cond_list`
-  so the resolved conductivities actually reach the solver:
+- The `charm --seeg` path writes a `*_seeg.json` sidecar (leads, `sheath_thickness_mm`,
+  `thin_shell_scale`, default `materials`/`cond_list`, voxel counts, warnings) for provenance.
+- **Build vs solve.** `charm --seeg` only segments + meshes and assigns the **default** sEEG
+  conductivities (thin-shell-corrected for the meshed sheath thickness). **Conductivity is set at
+  simulation time** on the built mesh — that is where any σ sweep lives; never rebuild to change σ.
+- **Solve with the default σ** — feed the sidecar's ready `cond_list` (the static `standard_cond()`
+  would miss the thin-shell correction):
 
   ```python
   from simnibs.simulation.seeg import load_seeg_cond_list
-  cl = load_seeg_cond_list("ernie_seeg.json")     # tag->σ vector, incl. scaled sheath
+  cl = load_seeg_cond_list("ernie_seeg.json")            # default σ, thin-shell-corrected
   for i, v in enumerate(cl):
-      tdcslist.cond[i].value = v
+      tdcslist.cond[i].value = v                          # tags 13-16
+  ```
+
+- **Sweep σ at solve time** — pass your own `materials`; the sheath σ gets the same recorded
+  thin-shell correction, and you re-solve the *same* mesh (no rebuild):
+
+  ```python
+  from simnibs.simulation.seeg import load_seeg_cond_list, SEEGMaterials
+  for s in (0.008, 0.05, 0.16, 0.30):                     # e.g. the bone-tract fibrous σ
+      cl = load_seeg_cond_list("ernie_seeg.json",
+                               materials=SEEGMaterials(fibrous_sheath_sigma=s))
+      # ... set tdcslist.cond from cl, solve, sample the deep contacts ...
   ```
 
 ---

@@ -49,12 +49,7 @@ def _cmd_conforming(args: argparse.Namespace) -> int:
 
     leads = _load_leads(args.leads)
     catalog = ElectrodeCatalog(args.catalog) if args.catalog else None
-    materials = SEEGMaterials(
-        contact_sigma=args.contact_sigma,
-        shaft_sigma=args.shaft_sigma,
-        sheath_sigma=args.sheath_sigma,
-        fibrous_sheath_sigma=args.fibrous_sheath_sigma,
-    )
+    # build = segmentation + meshing with DEFAULT conductivities; set sigma at solve time.
     res = {"standard": CONF_STANDARD, "fine": CONF_FINE, "ultra": CONF_ULTRA}[args.preset]
     over = {}
     if args.label_voxel_mm is not None:
@@ -67,7 +62,7 @@ def _cmd_conforming(args: argparse.Namespace) -> int:
     print(f"[seeg] conforming build from {args.m2m} ({res}) -- heavy, minutes ...")
     pl = build_conforming_head(
         args.m2m, leads, sheath_thickness_um=args.sheath_um,
-        materials=materials, catalog=catalog, resolution=res,
+        catalog=catalog, resolution=res,
         mesher=args.mesher, num_threads=args.num_threads,
     )
     print(pl.summary())
@@ -132,13 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--mesher", choices=["create_mesh", "image2mesh"], default="create_mesh",
                     help="create_mesh (default, native-quality head, solver-ready) | "
                          "image2mesh (faster/low-RAM raw CGAL, non-native head)")
-    pc.add_argument("--contact-sigma", type=float, default=SEEGMaterials().contact_sigma)
-    pc.add_argument("--shaft-sigma", type=float, default=SEEGMaterials().shaft_sigma)
-    pc.add_argument("--sheath-sigma", type=float, default=SEEGMaterials().sheath_sigma,
-                    help="glial sheath sigma (brain GM/WM), S/m")
-    pc.add_argument("--fibrous-sheath-sigma", type=float,
-                    default=SEEGMaterials().fibrous_sheath_sigma,
-                    help="fibrous sheath sigma (bone/scalp/soft-tissue tract), S/m")
+    # NOTE: no conductivity flags -- build assigns default sigma; set sigma at solve time.
     pc.add_argument("--catalog", default=None)
     pc.add_argument("--num-threads", type=int, default=8)
     pc.add_argument("--out", required=True)
