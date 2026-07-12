@@ -25,9 +25,12 @@ from ._params import (
     SEEG_CONTACT,
     SEEG_SHAFT,
     GLIAL_SHEATH,
+    FIBROUS_SHEATH,
     SEEG_TAGS,
+    SHEATH_TAGS,
+    BRAIN_TAGS,
+    SHEATH_TAG_BY_HOST,
     SEEGMaterials,
-    SheathParams,
     ConformingResolution,
     CONF_STANDARD,
     CONF_FINE,
@@ -39,7 +42,7 @@ from ._params import (
 )
 from .catalog import ElectrodeCatalog, ElectrodeSpec
 from .geometry import SEEGLead, perp_distance_and_axial
-from .conductivity import ensure_seeg_registered, build_seeg_cond_list
+from .conductivity import ensure_seeg_registered, build_seeg_cond_list, load_seeg_cond_list
 from .embed import build_conforming_head, SEEGPlacement
 from .charm_hook import apply_seeg_to_label, load_seeg_spec, SeegSpec
 from .seeg_views import add_seeg_views, write_seeg_view_pos, SEEG_VIEW_SPEC
@@ -68,7 +71,6 @@ __all__ = [
     "ElectrodeCatalog",
     "ElectrodeSpec",
     "SEEGMaterials",
-    "SheathParams",
     "MATERIALS_CHRONIC",
     "MATERIALS_DENSE",
     "MATERIALS_ACUTE",
@@ -77,9 +79,14 @@ __all__ = [
     "SEEG_CONTACT",
     "SEEG_SHAFT",
     "GLIAL_SHEATH",
+    "FIBROUS_SHEATH",
     "SEEG_TAGS",
+    "SHEATH_TAGS",
+    "BRAIN_TAGS",
+    "SHEATH_TAG_BY_HOST",
     "ensure_seeg_registered",
     "build_seeg_cond_list",
+    "load_seeg_cond_list",
     # --- sampling / QC ---
     "extract_axis_fields",
     "AxisProfile",

@@ -44,6 +44,7 @@ class ElementTags(IntEnum):
     SEEG_CONTACT = 13
     SEEG_SHAFT = 14
     GLIAL_SHEATH = 15
+    FIBROUS_SHEATH = 16
     ELECTRODE_RUBBER_START = 100
     ELECTRODE_RUBBER = 100
     ELECTRODE_RUBBER_END = 499
@@ -69,6 +70,7 @@ class ElementTags(IntEnum):
     SEEG_CONTACT_TH_SURFACE = TH_SURFACE_START + SEEG_CONTACT
     SEEG_SHAFT_TH_SURFACE = TH_SURFACE_START + SEEG_SHAFT
     GLIAL_SHEATH_TH_SURFACE = TH_SURFACE_START + GLIAL_SHEATH
+    FIBROUS_SHEATH_TH_SURFACE = TH_SURFACE_START + FIBROUS_SHEATH
     INTERNAL_AIR_TH_SURFACE = TH_SURFACE_START + ELECTRODE_RUBBER_START - 1
 
     ELECTRODE_RUBBER_TH_SURFACE_START = TH_SURFACE_START + ELECTRODE_RUBBER_START
@@ -191,6 +193,7 @@ tissue_tags: list[int] = [
     ElementTags.SEEG_CONTACT,
     ElementTags.SEEG_SHAFT,
     ElementTags.GLIAL_SHEATH,
+    ElementTags.FIBROUS_SHEATH,
     ElementTags.ELECTRODE_RUBBER,
     ElementTags.SALINE,
 ]
@@ -211,6 +214,7 @@ tissue_names: dict[int, str] = {
     ElementTags.SEEG_CONTACT: "SEEG_contact",
     ElementTags.SEEG_SHAFT: "SEEG_shaft",
     ElementTags.GLIAL_SHEATH: "Glial_sheath",
+    ElementTags.FIBROUS_SHEATH: "Fibrous_sheath",
     ElementTags.ELECTRODE_RUBBER: "Electrode_rubber",
     ElementTags.SALINE: "Saline",
 }
@@ -230,7 +234,8 @@ tissue_conductivities: dict[int, float] = {
     ElementTags.FAT: 0.078,
     ElementTags.SEEG_CONTACT: 1.0e6,
     ElementTags.SEEG_SHAFT: 1.0e-5,
-    ElementTags.GLIAL_SHEATH: 0.10,
+    ElementTags.GLIAL_SHEATH: 0.05,
+    ElementTags.FIBROUS_SHEATH: 0.16,
     ElementTags.ELECTRODE_RUBBER: 29.4,
     ElementTags.SALINE: 1.0,
 }
@@ -250,7 +255,8 @@ tissue_conductivity_descriptions: dict[int, str] = {
     ElementTags.FAT: "Fat (from Gabriel et al, 2009)",
     ElementTags.SEEG_CONTACT: "sEEG metallic contact (Pt/Pt-Ir); equipotential-limit 1e6 S/m for FEM stability (Datta 2011; Lempka 2013)",
     ElementTags.SEEG_SHAFT: "sEEG insulating shaft (polyurethane/silicone); near-insulator (physical ~1e-12 S/m)",
-    ElementTags.GLIAL_SHEATH: "peri-electrode glial/encapsulation sheath, resistive shell (Grill & Mortimer 1994; Butson 2006; Yousif 2008; Missey 2026 SI S7)",
+    ElementTags.GLIAL_SHEATH: "peri-electrode glial/encapsulation sheath (brain GM/WM), resistive shell 0.05 S/m@1kHz (~0.10 at 5-9 kHz; sweep 0.05-0.20) (Evers 2022 [rat DBS EIS]; Butson 2006; Yousif 2008; Grill & Mortimer 1994; Missey 2026 SI S7)",
+    ElementTags.FIBROUS_SHEATH: "peri-electrode fibrous/granulation tract tissue (bone/scalp/soft-tissue segments), 0.16 S/m ~freq-independent (Grill & Mortimer 1994); a conductive shunt vs bone",
     ElementTags.ELECTRODE_RUBBER: "for tDCS rubber electrodes",
     ElementTags.SALINE: "for tDCS sponge electrodes",
 }

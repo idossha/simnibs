@@ -11,7 +11,7 @@ import pytest
 from simnibs.simulation.seeg.catalog import ElectrodeCatalog, ElectrodeSpec
 from simnibs.simulation.seeg.geometry import SEEGLead, perp_distance_and_axial
 from simnibs.simulation.seeg._params import (
-    SEEG_CONTACT, SEEG_SHAFT, GLIAL_SHEATH, SEEGMaterials,
+    SEEG_CONTACT, SEEG_SHAFT, GLIAL_SHEATH, FIBROUS_SHEATH, SEEGMaterials,
 )
 
 
@@ -134,3 +134,68 @@ def test_registration_reflects_sweep_materials():
     assert cond_utils.standard_cond()[GLIAL_SHEATH - 1].value == pytest.approx(0.05)
     ensure_seeg_registered(SEEGMaterials(sheath_sigma=0.30))
     assert mep.tissue_conductivities[GLIAL_SHEATH] == pytest.approx(0.30)
+
+
+# --------------------------------------------------------------------------- #
+# Single-source-of-truth guards (fail loudly on silent drift)
+# --------------------------------------------------------------------------- #
+def test_native_sheath_sigma_matches_module_default():
+    """The native registry default (what a stock run_simnibs uses) must equal the module
+    default so 'charm --seeg' then 'run_simnibs' does not silently solve a different sigma.
+
+    Read the committed source value (not the live dict, which ensure_seeg_registered mutates)."""
+    import ast, inspect
+    from simnibs.utils import mesh_element_properties as mep
+    tree = ast.parse(inspect.getsource(mep))
+
+    def _targets(node):
+        if isinstance(node, ast.Assign):
+            return node.targets
+        if isinstance(node, ast.AnnAssign):        # tissue_conductivities: dict[int,float] = {...}
+            return [node.target]
+        return []
+
+    src_sheath = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            getattr(t, "id", None) == "tissue_conductivities" for t in _targets(node)
+        ):
+            if not isinstance(node.value, ast.Dict):
+                continue
+            for key, val in zip(node.value.keys, node.value.values):
+                if getattr(key, "attr", None) == "GLIAL_SHEATH":   # ElementTags.GLIAL_SHEATH
+                    src_sheath = ast.literal_eval(val)
+    assert src_sheath is not None, "GLIAL_SHEATH not found in tissue_conductivities source"
+    assert src_sheath == pytest.approx(SEEGMaterials().sheath_sigma)
+
+
+def test_segmented_materials_carry_fibrous_tag():
+    """The fibrous sheath (tag 16) is a first-class material: in as_tag_map, scaled by
+    with_scaled_sheath alongside the glial sheath, and present in the solver cond_list."""
+    from simnibs.simulation.seeg.conductivity import build_seeg_cond_list
+    m = SEEGMaterials()
+    tm = m.as_tag_map()
+    assert tm[GLIAL_SHEATH] == pytest.approx(0.05)
+    assert tm[FIBROUS_SHEATH] == pytest.approx(0.16)
+    # sub-voxel scaling scales BOTH sheaths, leaves contact/shaft untouched
+    s = m.with_scaled_sheath(2.0)
+    assert s.sheath_sigma == pytest.approx(0.10)
+    assert s.fibrous_sheath_sigma == pytest.approx(0.32)
+    assert s.contact_sigma == m.contact_sigma and s.shaft_sigma == m.shaft_sigma
+    # cond_list carries the fibrous value at index tag-1
+    cl = build_seeg_cond_list(materials=SEEGMaterials(fibrous_sheath_sigma=0.2))
+    assert cl[FIBROUS_SHEATH - 1] == pytest.approx(0.2)
+    assert cl[GLIAL_SHEATH - 1] == pytest.approx(0.05)
+
+
+def test_seeg_hierarchy_tail_matches_meshing_default():
+    """SEEG_HIERARCHY must be the sEEG tags followed by meshing.create_mesh's own hierarchy=None
+    default -- if upstream changes that default, this fails instead of silently reordering."""
+    from simnibs.simulation.seeg._params import SEEG_HIERARCHY, SEEG_TAGS
+    from simnibs.mesh_tools import meshing
+    import inspect
+    src = inspect.getsource(meshing.create_mesh)
+    # the native default is the tuple literal assigned when hierarchy is None
+    assert "(1, 2, 9, 3, 4, 8, 7, 6, 11, 10, 12, 5)" in src
+    native = (1, 2, 9, 3, 4, 8, 7, 6, 11, 10, 12, 5)
+    assert SEEG_HIERARCHY == (*SEEG_TAGS, *native)

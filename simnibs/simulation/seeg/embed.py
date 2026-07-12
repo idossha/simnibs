@@ -1,15 +1,17 @@
 """``build_conforming_head`` -- rebuild the whole head with the sEEG electrodes as
 *conforming* subdomains (smooth cylinders, not a tet staircase).
 
-The electrode materials (contact=13 / shaft=14 / sheath=15) are painted into the
+The electrode materials (contact=13 / shaft=14 / glial sheath=15 / fibrous sheath=16) are painted into the
 subject's real tissue label image (replacing the tissue they occupy -- no background
 block), the head is upsampled to the target voxel size, and the whole thing is remeshed
 with ``meshing.create_mesh`` so the electrode surfaces are honoured. The result is a
 run_simnibs-ready ``SEEGPlacement`` carrying the tagged mesh + conductivity list.
 
-This is the whole-head remesh path (tens of minutes to a couple of hours). It is what the
-native ``charm --seeg`` step calls under the hood. See ``ConformingResolution`` presets for
-the fidelity/cost tradeoff.
+This is the whole-head remesh path (tens of minutes to a couple of hours). It mirrors what the
+native ``charm --seeg`` step does (paint the same compartments, then create_mesh with charm's
+own tissue sizing) as a standalone entry point that does not need the charm CLI; the native
+step itself uses ``charm_hook.apply_seeg_to_label`` inside charm's mesh block, not this
+function. See ``ConformingResolution`` presets for the fidelity/cost tradeoff.
 """
 
 from __future__ import annotations
@@ -25,9 +27,12 @@ from ._params import (
     SEEG_CONTACT,
     SEEG_SHAFT,
     GLIAL_SHEATH,
+    FIBROUS_SHEATH,
+    SEEG_HIERARCHY,
     SEEGMaterials,
     ConformingResolution,
     CONF_FINE,
+    sheath_paint_warnings,
 )
 from .catalog import ElectrodeCatalog
 from .geometry import SEEGLead, perp_distance_and_axial
@@ -68,22 +73,22 @@ class SEEGPlacement:
     def n_sheath_tets(self) -> int:
         return int(self.tag_counts.get(GLIAL_SHEATH, 0))
 
+    @property
+    def n_fibrous_tets(self) -> int:
+        return int(self.tag_counts.get(FIBROUS_SHEATH, 0))
+
     def summary(self) -> str:
         lines = [
             f"SEEGPlacement [{self.method}]: {len(self.leads)} lead(s), "
             f"sheath {self.sheath_thickness_mm * 1000:.0f} um",
             f"  contact tets: {self.n_contact_tets}",
             f"  shaft   tets: {self.n_shaft_tets}",
-            f"  sheath  tets: {self.n_sheath_tets}",
+            f"  glial sheath  tets: {self.n_sheath_tets}",
+            f"  fibrous sheath tets: {self.n_fibrous_tets}",
         ]
         for w in self.warnings:
             lines.append(f"  ! {w}")
         return "\n".join(lines)
-
-# electrode-first hierarchy so tissue-interface triangles get clean 1013/1014/1015 shells
-# (R1: electrode tags first -> reconstruct_unique_surface keeps the electrode surface)
-_HIERARCHY = (13, 14, 15, 1, 2, 9, 3, 4, 8, 7, 6, 11, 10, 12, 5)
-
 
 def build_conforming_head(
     reference,
@@ -94,7 +99,7 @@ def build_conforming_head(
     catalog: ElectrodeCatalog | None = None,
     resolution: ConformingResolution | None = None,
     displace_tags: tuple[int, ...] | None = None,
-    sheath_tags: tuple[int, ...] | None = None,
+    sheath_tag_map: dict[int, int] | None = None,
     mesher: str = "create_mesh",
     num_threads: int = 8,
     crop_to_head: bool = True,
@@ -108,13 +113,14 @@ def build_conforming_head(
         ``(label_image, affine)`` tuple.
     leads : list[SEEGLead]
         Electrodes; ``part_number`` selects geometry from ``catalog``.
-    sheath_thickness_um : glial-sheath thickness (um).
-    materials : conductivities for tags 13/14/15 (default = stable defaults).
+    sheath_thickness_um : sheath thickness (um), same for both sheath types.
+    materials : conductivities for tags 13/14/15/16 (default = stable defaults).
     catalog : electrode geometry lookup (default = bundled catalog).
     resolution : ConformingResolution (default = CONF_FINE; label_voxel_mm sets fidelity).
     displace_tags : tissue tags the body may replace (None -> 1..12).
-    sheath_tags : tissues in which the sheath may grow (None -> all tissue 1..12, so the
-        electrode is fully encapsulated skin->tip; pass e.g. (1,2,3) to restrict to brain).
+    sheath_tag_map : host tissue -> sheath tag (segmented sheath); None -> the default
+        ``_params.SHEATH_TAG_BY_HOST`` (brain -> glial 15, bone/scalp/soft -> fibrous 16,
+        CSF/blood -> bare shaft).
     mesher : "create_mesh" (default, solver-ready) | "image2mesh" (advanced/raw CGAL).
     num_threads : CGAL threads.
     crop_to_head : crop to the nonzero-tissue bbox before upsampling (big RAM/time saving).
@@ -162,11 +168,7 @@ def build_conforming_head(
     if sheath_mm > 0 and sheath_mm < dv:
         paint_sheath_mm = float(dv)
         scale = paint_sheath_mm / sheath_mm
-        materials = SEEGMaterials(
-            contact_sigma=materials.contact_sigma,
-            shaft_sigma=materials.shaft_sigma,
-            sheath_sigma=materials.sheath_sigma * scale,   # keep t/sigma constant
-        )
+        materials = materials.with_scaled_sheath(scale)   # keep both shells' t/sigma constant
         msg = (f"sheath {sheath_mm*1000:.0f} um < voxel {dv*1000:.0f} um: meshed at "
                f"1 voxel with sigma scaled x{scale:.2f} (preserves t/sigma). For a "
                f"true-thickness sheath use preview_electrode / the surface route.")
@@ -175,13 +177,11 @@ def build_conforming_head(
     # --- paint the electrodes into the real tissue label ---
     label, vox_counts = _raster.paint_leads_into_label(
         label, affine, leads, catalog, paint_sheath_mm,
-        displace_tags=displace_tags, sheath_tags=sheath_tags,
+        displace_tags=displace_tags, sheath_tag_map=sheath_tag_map,
     )
     logger.info("sEEG conforming: painted voxels %s", vox_counts)
-    for tag in SEEG_TAGS:
-        if vox_counts[tag] == 0:
-            msg = f"tag {tag} got 0 voxels (electrode outside tissue or too thin)"
-            logger.warning(msg); warnings.append(msg)
+    for msg in sheath_paint_warnings(vox_counts):
+        logger.warning(msg); warnings.append(msg)
 
     # CGAL meshers want an integer label image
     if label.max() < 256:
@@ -199,7 +199,7 @@ def build_conforming_head(
         m = meshing.create_mesh(
             label, affine,
             elem_sizes=cm["elem_sizes"], facet_distances=cm["facet_distances"],
-            hierarchy=_HIERARCHY, skin_tag=1005, apply_cream=True,
+            hierarchy=SEEG_HIERARCHY, skin_tag=1005, apply_cream=True,
             smooth_steps=10, skin_care=20, skin_facet_size=2.0,
             optimize=False, num_threads=num_threads,
         )
@@ -219,12 +219,10 @@ def build_conforming_head(
         for ld in leads
     }
     tag_counts = {int(t): int(((tag1 == t) & tet).sum()) for t in SEEG_TAGS}
-    for tag in SEEG_TAGS:
-        if tag_counts[tag] == 0:
-            msg = f"tag {tag} absent from the meshed head (CGAL dropped a thin region?)"
-            logger.warning(msg)
-            if msg not in warnings:
-                warnings.append(msg)
+    for msg in sheath_paint_warnings(tag_counts):
+        logger.warning(msg)
+        if msg not in warnings:
+            warnings.append(msg)
 
     return SEEGPlacement(
         mesh=m,

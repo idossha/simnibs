@@ -2,7 +2,7 @@
 
 Used by the CONFORMING embed method (``embed.build_conforming_head``): resolve a head
 tissue label image, crop to the head, upsample to the target voxel size, and paint the
-electrode materials (contact=13, shaft=14, sheath=15) directly into it -- replacing the
+electrode materials (contact=13, shaft=14, glial sheath=15, fibrous sheath=16) directly into it -- replacing the
 tissue they occupy, with NO artificial background block. The whole head is then remeshed
 with CGAL so the electrode surfaces are honoured.
 
@@ -21,7 +21,9 @@ from ._params import (
     SEEG_CONTACT,
     SEEG_SHAFT,
     GLIAL_SHEATH,
+    FIBROUS_SHEATH,
     DISPLACE_TAGS,
+    SHEATH_TAG_BY_HOST,
 )
 from .geometry import perp_distance_and_axial
 
@@ -127,29 +129,29 @@ def paint_leads_into_label(
     sheath_mm: float,
     *,
     displace_tags: tuple[int, ...] | None = None,
-    sheath_tags: tuple[int, ...] | None = None,
-    brain_tags: tuple[int, ...] | None = None,   # deprecated alias for sheath_tags
+    sheath_tag_map: dict[int, int] | None = None,
     entry_extend_mm: float = 4.0,
 ) -> tuple[np.ndarray, dict[int, int]]:
-    """Paint contact/shaft/sheath (13/14/15) into ``label`` (returns a painted copy).
+    """Paint contact (13), shaft (14) and the **segmented sheath** (15/16) into ``label``.
 
-    The electrode is modelled over its **entire in-head length, skin -> tip**, and is
-    fully wrapped by the glial/scar sheath so **no part of the metal or shaft is ever in
-    direct contact with tissue** (in particular GM/WM):
+    The electrode is modelled over its **entire in-head length, skin -> tip**, and is wrapped
+    in a **host-keyed** peri-electrode sheath: each sheath voxel is tagged by the tissue it
+    grows in, so the glial scar (brain) and the fibrous tract (bone/scalp) carry their own
+    conductivities, and compartments that host no reactive tissue (CSF) are left bare.
 
     * Body (contact discs + insulating shaft) replaces any tissue in ``displace_tags``
       (default 1..12) along the whole entry->tip trajectory. The entry is extended
       ``entry_extend_mm`` outward so the shaft reliably reaches the outer skin even if the
       supplied entry sits a little inside it (over-extension into air paints nothing).
-    * Sheath is a **complete encapsulating tube**: every ``sheath_tags`` voxel within
-      ``sheath_mm`` (>=1 voxel) of the body becomes sheath (morphological dilation of the
-      body, minus the body). Because it dilates the body, every face-neighbour of the body
-      that is tissue is sheath -- so the body is provably never face-adjacent to bare
-      GM/WM. ``sheath_tags`` defaults to all tissue (1..12) so the electrode is wrapped
-      "all the way" (skin, bone, CSF and brain); pass a subset (e.g. brain only) to
-      restrict. Priority sheath < shaft < contact.
+    * Sheath is grown by morphological dilation of the body (>=1 voxel). Each shell voxel is
+      mapped through ``sheath_tag_map`` (host tissue -> sheath tag): brain WM/GM -> GLIAL_SHEATH
+      (15), bone/scalp/soft tissue -> FIBROUS_SHEATH (16); a host absent from the map (CSF,
+      blood, ...) gets NO sheath (bare shaft there). Because it dilates the body, every
+      face-neighbour of the body whose host is IN the map becomes sheath -- so the body is
+      provably never face-adjacent to bare GM/WM (both mapped). Default map =
+      ``_params.SHEATH_TAG_BY_HOST``. Priority sheath < shaft < contact.
 
-    Returns ``(painted_label, voxel_counts)``.
+    Returns ``(painted_label, voxel_counts)`` (counts keyed by 13/14/15/16).
     """
     from scipy.ndimage import binary_dilation
 
@@ -157,12 +159,17 @@ def paint_leads_into_label(
     inv = np.linalg.inv(affine)
     voxel = float(np.mean(np.linalg.norm(affine[:3, :3], axis=0)))
     body_tags = np.asarray(DISPLACE_TAGS if displace_tags is None else displace_tags)
-    # Sheath grows in ALL tissue by default so the electrode is encapsulated over its whole
-    # length ("around it all"); brain_tags is kept as a deprecated alias.
-    if sheath_tags is None:
-        sheath_tags = brain_tags if brain_tags is not None else DISPLACE_TAGS
-    sheath_host = np.asarray(sheath_tags)
-    counts = {SEEG_CONTACT: 0, SEEG_SHAFT: 0, GLIAL_SHEATH: 0}
+    if sheath_tag_map is None:
+        sheath_tag_map = SHEATH_TAG_BY_HOST
+    # host-tissue -> sheath-tag lookup table (index by host label; 0 = no sheath there). Span
+    # through FIBROUS_SHEATH so already-painted sEEG voxels (13-16, all mapped to 0) from an
+    # earlier lead are never re-tagged when they fall inside a later lead's shell.
+    lut_n = int(max(list(sheath_tag_map) + [FIBROUS_SHEATH, int(out.max()), 0])) + 1
+    host_lut = np.zeros(lut_n, dtype=out.dtype)
+    for host, tag in sheath_tag_map.items():
+        if 0 <= host < lut_n:
+            host_lut[host] = tag
+    counts = {SEEG_CONTACT: 0, SEEG_SHAFT: 0, GLIAL_SHEATH: 0, FIBROUS_SHEATH: 0}
 
     # sheath shell thickness in whole voxels (>=1 so it is a *consistent*, gap-free shell)
     n_sheath = int(round(max(0.0, sheath_mm) / voxel)) if sheath_mm > 0 else 0
@@ -206,22 +213,27 @@ def paint_leads_into_label(
         shaft = body_ok & (dist <= r_body) & ~metal
         body_mask = (metal | shaft).reshape(shape)
 
-        # complete sheath tube: dilate the body by the shell thickness and keep the tissue
-        # voxels that are NOT body -> a gap-free shell that provably separates the electrode
-        # from every adjacent tissue voxel (no bare GM/WM contact anywhere).
+        # segmented sheath tube: dilate the body, then tag each shell voxel by the tissue it
+        # sits in (host_lut). Voxels whose host maps to a tag become sheath; hosts absent from
+        # the map (CSF, blood, ...) get 0 -> stay bare. Because it dilates the body, every
+        # face-neighbour of the body whose host is mapped is sheath -> no bare GM/WM (both mapped).
         if n_sheath > 0 and body_mask.any():
             shell = binary_dilation(body_mask, iterations=n_sheath).reshape(-1)
-            sheath = shell & ~metal & ~shaft & np.isin(cur, sheath_host)
+            host_idx = np.clip(cur, 0, host_lut.size - 1)
+            sheath_tag_of = host_lut[host_idx]                 # per-voxel target sheath tag (0=none)
+            sheath = shell & ~metal & ~shaft & (sheath_tag_of > 0)
         else:
             sheath = np.zeros_like(metal)
+            sheath_tag_of = np.zeros_like(cur)
 
         # apply priority: sheath, then shaft, then metal (metal wins)
-        cur[sheath] = GLIAL_SHEATH
+        cur[sheath] = sheath_tag_of[sheath]
         cur[shaft] = SEEG_SHAFT
         cur[metal] = SEEG_CONTACT
         out[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = cur.reshape(shape)
         counts[SEEG_CONTACT] += int(metal.sum())
         counts[SEEG_SHAFT] += int(shaft.sum())
-        counts[GLIAL_SHEATH] += int(sheath.sum())
+        counts[GLIAL_SHEATH] += int((sheath_tag_of[sheath] == GLIAL_SHEATH).sum())
+        counts[FIBROUS_SHEATH] += int((sheath_tag_of[sheath] == FIBROUS_SHEATH).sum())
 
     return out, counts

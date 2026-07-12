@@ -31,11 +31,13 @@ Two modelling requirements specific to this study are enforced by construction:
 1. **Full length, skin → tip.** The shaft is painted along the entire entry→tip trajectory
    through scalp → bone → CSF → GM → WM (the entry is extended outward so the rod reliably
    reaches the outer skin).
-2. **Complete encapsulation — no bare GM/WM.** The sheath is a gap-free tube built by
-   morphological dilation of the electrode body, so **no metal or shaft voxel is ever
-   face-adjacent to bare GM/WM** (or any tissue) — the scar always sits between electrode
-   and parenchyma. By default the tube wraps the whole track (all tissue); pass
-   `sheath_tags=(1,2,3)` to restrict it to brain.
+2. **Segmented encapsulation — no bare GM/WM.** The sheath is a gap-free tube built by
+   morphological dilation of the electrode body, but each shell voxel is tagged by the tissue
+   it grows in (`SHEATH_TAG_BY_HOST`): **brain GM/WM → glial sheath (15, σ 0.05), bone/scalp/
+   soft tissue → fibrous sheath (16, σ 0.16), CSF/blood → no sheath (bare shaft)**. Because it
+   dilates the body, **no metal or shaft voxel is ever face-adjacent to bare GM/WM** (both are
+   mapped). Only the CSF-bathed segment is left bare — correct, since a CSF-immersed shaft
+   grows no encapsulation. See §6.7.
 
 ---
 
@@ -65,12 +67,13 @@ charm --mesh ernie --seeg leads.json           # re-mesh an existing m2m_ernie
   "label_voxel_mm": 0.25,
   "electrode_edge_mm": 0.12,
   "electrode_facet_distance_mm": 0.03,
-  "materials": {"contact_sigma": 1e6, "shaft_sigma": 1e-5, "sheath_sigma": 0.05}
+  "materials": {"contact_sigma": 1e6, "shaft_sigma": 1e-5,
+                "sheath_sigma": 0.05, "fibrous_sheath_sigma": 0.16}
 }
 ```
 
 Only `leads` is required; everything else falls back to the study defaults in §6. charm
-writes the usual `ernie.msh` (now carrying tags 13/14/15) plus an `ernie_seeg.json`
+writes the usual `ernie.msh` (now carrying tags 13-16) plus an `ernie_seeg.json`
 provenance sidecar and an `ernie_seeg_views.pos` companion. The `.opt` automatically gives
 each sEEG structure its own toggleable, colour-coded **Gmsh view** — `SEEG_contact` medium
 grey, `SEEG_shaft` dark grey, `Glial_sheath` purple at 50 % opacity (deliberately outside
@@ -110,7 +113,7 @@ The module is a thin, self-contained package under `simnibs/simulation/seeg/`. O
 
 | File | Responsibility |
 |------|----------------|
-| `_params.py` | tags (13/14/15), `SEEGMaterials`, `ConformingResolution`/`CONF_*`, native charm sizing |
+| `_params.py` | tags (13-16), `SEEGMaterials`, `SHEATH_TAG_BY_HOST`, `ConformingResolution`/`CONF_*`, native charm sizing |
 | `catalog.py` | `ElectrodeSpec`/`ElectrodeCatalog` + bundled `seeg_catalog.json` (BF/RD/SD/DIXI/PMT) |
 | `geometry.py` | `SEEGLead` (entry→tip trajectory) + `perp_distance_and_axial` (pure numpy) |
 | `_raster.py` | rasterise leads into the tissue label: full-length body + complete sheath tube |
@@ -121,11 +124,18 @@ The module is a thin, self-contained package under `simnibs/simulation/seeg/`. O
 | `sample.py`, `passive.py` | extract carrier/AM E-field along each electrode axis from a solved mesh |
 | `__main__.py` | CLI (`conforming`, `fields`) |
 
-The three new element tags live in the free tissue band of `utils/mesh_element_properties.py`
-(`SEEG_CONTACT=13`, `SEEG_SHAFT=14`, `GLIAL_SHEATH=15`), so `cond_utils.standard_cond()` and
+The four new element tags live in the free tissue band of `utils/mesh_element_properties.py`
+(`SEEG_CONTACT=13`, `SEEG_SHAFT=14`, `GLIAL_SHEATH=15`, `FIBROUS_SHEATH=16`), so
+`cond_utils.standard_cond()` and
 the standard TDCS/TI solver treat them as ordinary tissues — **no solver changes**. The module
-also self-registers them at import (`ensure_seeg_registered`) so it works against a stock
-SimNIBS install too.
+also registers them at runtime (`ensure_seeg_registered`, called by the hook / build functions —
+not at import), so it works against a stock SimNIBS install whose enum was not edited too.
+
+**Why `simulation/seeg/` and not `segmentation/`?** The build step is a meshing operation, but
+the package's purpose is a *solvable* TDCS/TI field model (it owns the sEEG conductivity
+registration and field sampling), so it lives beside the other simulation-input builders such
+as `simulation/tms_coil/`. Its only coupling to the rest of SimNIBS is the one opt-in charm
+hook; `geometry.py`/`_raster.py` are SimNIBS-free numpy leaves.
 
 ---
 
@@ -184,20 +194,21 @@ from. Local PDFs are in [`references/`](references/); `[ext]` = cited without a 
 | `first_contact_depth_mm` | 2.0 | mm | clinical convention (contact-0 proximal to tip; distal-first numbering) |
 | microwires (9 × 40 µm Pt/Ir) | omitted | — | [neuralynx note](references/neuralynx_macro_micro_electrodes.md); ~30× sub-element, no mm-field effect |
 
-### 6.2 Material conductivities (element tags 13 / 14 / 15)
+### 6.2 Material conductivities (element tags 13 / 14 / 15 / 16)
 
 | Variable | Default | Sweep / range | Unit | Source |
 |---|---|---|---|---|
 | `contact_sigma` (tag 13) | **1×10⁶** | 1×10⁴ – 5.8×10⁷ | S/m | equipotential/PEC limit — [Datta 2011](references/Datta-2011_BrainStimulation.pdf) (5.8×10⁷ physical), [Lempka 2013](references/Lempka-2013_PLoSONE.pdf), [Karimi 2025](references/Karimi_2025_J._Neural_Eng._22_016039.pdf) (PEC). 1×10⁶ ≥6 orders > tissue → equipotential while keeping the solve conditioned (Missey-2026 uses PEC) |
 | `shaft_sigma` (tag 14) | **1×10⁻⁵** | 1×10⁻⁴ – 1×10⁻¹² | S/m | polyurethane insulator (physical ~1×10⁻¹²); Missey "inter-contacts as insulators"; ≥4 orders < tissue blocks current without ill-conditioning |
-| `sheath_sigma` (tag 15) | **0.05** | 0.05 – 0.30 (acute 1.0–1.7) | S/m | [Karimi 2025](references/Karimi_2025_J._Neural_Eng._22_016039.pdf) mouse scar @1 kHz (0.019/0.05/0.28 @ 20 Hz/1 kHz/300 kHz). Corroborating: Grill&Mortimer 1994 (0.15) `[ext]`; Butson 2006 (0.05–0.20) `[ext]`; Yousif 2008 (0.125) `[ext]` |
+| `sheath_sigma` — **glial** sheath (tag 15, brain GM/WM) | **0.05** (1 kHz) → recommend **0.10** at 5–9 kHz | 0.05 – 0.20 (acute 1.0–1.7) | S/m | **Evers 2022** rat chronic-DBS EIS (= Karimi 2025 ref [48], *not* a Karimi mouse measurement): 0.019/0.05/0.28 @ 20 Hz/1 kHz/300 kHz — **positive dispersion**, so 0.05 is only the 1 kHz value and the carrier-band value is ~0.08–0.10. Consensus: Butson 2006 (0.1), Yousif 2008 (0.125), Alonso & Wardell 2015 (0.1), Grill&Mortimer 1994 (0.16). See §6.7 |
+| `fibrous_sheath_sigma` — **fibrous** sheath (tag 16, bone/scalp/soft-tissue tract) | **0.16** | 0.10 – 0.50 (acute granulation) | S/m | mature fibrous capsule, [Grill & Mortimer 1994](references/) (627 Ω·cm, ~frequency-flat 10 Hz–100 kHz). A **conductive shunt** vs bone (0.008–0.025); left bare in CSF. See §6.7 |
 
 ### 6.3 Glial sheath geometry
 
 | Variable | Default | Sweep / range | Unit | Source |
 |---|---|---|---|---|
 | `sheath_thickness_um` | **150** | 100 – 500 | µm | [Missey 2026 SI Fig S7](references/Missey-2026.pdf) / [mmc1.docx](references/mmc1.docx) (150–300); DBS/FBR lit 250–500 `[ext]` |
-| encapsulation extent | complete tube, **all tissue** | brain-only via `sheath_tags=(1,2,3)` | — | this study's requirement (no bare GM/WM); enhancement decays <400 µm ≈ sheath ([Missey 2026](references/Missey-2026.pdf)) |
+| encapsulation extent | **segmented by host** (`SHEATH_TAG_BY_HOST`): brain→glial, bone/scalp→fibrous, CSF→bare | custom via `sheath_tag_map` | — | no bare GM/WM; glial-scar decays <400 µm ≈ sheath ([Missey 2026](references/Missey-2026.pdf)); see §6.7 |
 | shell mesh thickness | max(1 voxel, `sheath/voxel`) | — | voxel | thin-shell equivalence: σ scaled ×(t_mesh/t_phys) to preserve sheet resistance t/σ |
 
 ### 6.4 Reference tissue conductivities (SimNIBS, unchanged)
@@ -221,13 +232,41 @@ from. Local PDFs are in [`references/`](references/); `[ext]` = cited without a 
 
 | Decision | Value | Source |
 |---|---|---|
-| Field equation | purely resistive QSA `∇·(σ∇φ)=0` (no permittivity) | [Opitz 2016](references/Opitz-2016_ScientificReports.pdf); [Missey 2026](references/Missey-2026.pdf); QSA valid 1–9 kHz (σ≫ωε) |
+| Field equation | purely resistive QSA `∇·(σ∇φ)=0` (no permittivity) | [Opitz 2016](references/Opitz-2016_ScientificReports.pdf); [Missey 2026](references/Missey-2026.pdf). QSA basis: wavelength ≫ head at 1–9 kHz (no propagation) and a uniform loss tangent leaves the normalized field unchanged, so the resistive solution is the field standard. Caveat: the loss tangent ωε/σ ≈ 0.1–0.5 (largest at the low-σ sheath), so the sheath barrier at 9 kHz is a slight over-estimate vs its 1 kHz value — bounded, no solver change warranted |
 | Contact boundary | high-σ volume ≈ floating equipotential (net-≈0 current for recording) | [Datta 2011](references/Datta-2011_BrainStimulation.pdf); [Lempka 2013](references/Lempka-2013_PLoSONE.pdf) |
 | Validation metrics | Pearson **r** (spatial distribution), regression slope **s** (magnitude) | [Huang 2017](references/Huang-2017_eLife.pdf) |
 | TI principle / carriers | AM envelope of two kHz carriers | [Grossman 2017](references/Grossman-2017_Cell.pdf) |
 | Passive-sample baseline | read φ at node nearest each contact, then symmetric difference quotient | [Huang 2017](references/Huang-2017_eLife.pdf); [Opitz 2016](references/Opitz-2016_ScientificReports.pdf); [Louviot 2022](references/Louviot-2022_BrainStimulation.pdf) |
 
 ---
+
+## 6.7 Segmented sheath — reactive-tissue conductivity by compartment
+
+The single `sheath_sigma` above is a **brain glial-scar** value. But the electrode passes through
+tissues whose conductivity spans 200× (compact bone 0.008 → CSF 1.654 S/m), and the reactive
+tissue that forms — and its *contrast* with the host — differs by compartment; the contrast even
+**flips sign**. A uniform 0.05 S/m shell is therefore a resistive shell in grey matter (correct)
+but a ~6× conductive **shunt** through the skull and a spurious ~33× resistive barrier in CSF
+(both wrong). Recommended per-compartment values at the 5–9 kHz carrier (see
+`_params.SHEATH_SIGMA_BY_COMPARTMENT`):
+
+| Host (SimNIBS tag, σ) | Reactive tissue | σ_sheath (5–9 kHz) | Contrast → effect | Evidence |
+|---|---|---|---|---|
+| **GM** (2, 0.275) | glial + fibrous scar | **0.10** (0.05–0.20) | resistive shell → near-contact enhancement | Evers 2022 (measured, interp.) |
+| **WM** (1, 0.126) | same scar | **0.10** | ~iso-conductive → weak, sign-ambiguous | Evers 2022; Yousif 2008 |
+| **CSF** (3, 1.654) | none (bathed shaft) | **none** (= host) | a shell here is a *spurious barrier* | measured CSF; no encapsulation |
+| **Bone** (4/7/8, 0.008–0.025) | anchor bolt / fibrous tract | **none** (bare shaft) *or* 0.16 | any soft fill = 10–60× **shunt** through skull | analogical (Grill&Mortimer); bolt = real hardware |
+| **Scalp/soft** (5/10/12, 0.078–0.465) | fibrous exit-tract scar | **0.16** | mild resistive, far from contacts | Grill&Mortimer 1994 (measured, freq-flat) |
+
+Key points: (1) the measured brain-scar source is **Evers et al. 2022** (rat chronic DBS EIS), not
+a Karimi mouse measurement — Karimi 2025 cites it as ref [48]. (2) Scar conductivity **rises with
+frequency** (0.05→0.28 S/m over 1 kHz→300 kHz), so at the carrier the brain value is ~0.08–0.10,
+not 0.05. (3) sEEG monitoring is **subacute** (~1–2 wk): resolving edema may keep σ higher
+(0.15–0.5, up to acute ~1.7 S/m) — sweep this. (4) **No prior FEM segments the sheath** (all use one
+uniform shell; Howell & McIntyre 2016 varies only the *host*), so the segmented model is a novel,
+defensible refinement. The physically-honest *default* is a **brain-only** glial sheath (GM/WM) with
+a bare shaft elsewhere; full per-compartment segmentation (fibrous bone/scalp tract as a separate
+tag) is the richer opt-in.
 
 ## 7. Resolution & honest limits
 
@@ -246,11 +285,22 @@ from. Local PDFs are in [`references/`](references/); `[ext]` = cited without a 
 
 - The fork is an unbuilt source tree. Verification is done against the installed **SimNIBS
   4.6** env (the seeg package symlinked into its site-packages; the three charm files patched
-  with `.bak_preseeg` backups). Tags 13/14/15 self-register at runtime.
+  with `.bak_preseeg` backups). Tags 13-16 self-register at runtime.
 - The `charm --seeg` path writes a `*_seeg.json` sidecar (leads, materials, voxel counts,
   warnings) next to the mesh for provenance.
 - To solve, feed `pl.mesh` + `pl.cond_list` (or the tagged `ernie.msh`) to the stock
   `run_simnibs`; the new tags are already in `standard_cond()`.
+- **Getting the spec's sheath σ into the solve (native `charm --seeg` path).** `standard_cond()`
+  returns the *static* registry σ and cannot know either your per-spec `sheath_sigma` or the
+  thin-shell up-scaling applied when the sheath was sub-voxel. Use the sidecar's ready `cond_list`
+  so the resolved conductivities actually reach the solver:
+
+  ```python
+  from simnibs.simulation.seeg import load_seeg_cond_list
+  cl = load_seeg_cond_list("ernie_seeg.json")     # tag->σ vector, incl. scaled sheath
+  for i, v in enumerate(cl):
+      tdcslist.cond[i].value = v
+  ```
 
 ---
 

@@ -93,7 +93,7 @@ def test_hook_paints_and_augments():
     r = apply_seeg_to_label(lab, aff, _spec(),
                             elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET,
                             hierarchy=False)
-    # all three compartments painted
+    # contact, shaft, glial sheath painted (GM block -> glial, not fibrous)
     assert all(r.voxel_counts[t] > 0 for t in (SEEG_CONTACT, SEEG_SHAFT, GLIAL_SHEATH))
     # electrode finely sized, tissues untouched (head stays native)
     for t in ("13", "14", "15"):
@@ -136,3 +136,34 @@ def test_hook_sidecar_roundtrips():
     assert sc["leads"][0]["name"] == "T"
     assert set(sc["materials"].keys()) >= {"13", "14", "15"} or set(
         int(k) for k in sc["materials"]) >= {13, 14, 15}
+
+
+def test_hook_sidecar_cond_list_carries_resolved_sigma():
+    """The sidecar's cond_list must carry the *resolved* (thin-shell-scaled) sheath sigma so a
+    downstream run_simnibs uses the spec value, not the static registry default."""
+    from simnibs.simulation.seeg.conductivity import load_seeg_cond_list
+
+    lab, aff = _gm_block()
+    r = apply_seeg_to_label(lab, aff, _spec(sheath_thickness_um=150, label_voxel_mm=0.25),
+                            elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET)
+    sc = json.loads(json.dumps(r.sidecar()))
+    scaled = 0.05 * 0.25 / 0.15                       # sub-voxel sheath -> sigma up-scaled
+    assert sc["cond_list"][GLIAL_SHEATH - 1] == pytest.approx(scaled, rel=1e-3)
+    assert sc["cond_list"][SEEG_CONTACT - 1] == pytest.approx(1e6)
+    # load helper round-trips both from the dict and from a written file
+    assert load_seeg_cond_list(sc)[GLIAL_SHEATH - 1] == pytest.approx(scaled, rel=1e-3)
+
+
+def test_hook_preserves_custom_hierarchy():
+    """A non-empty charm hierarchy is preserved after the electrode tags, not dropped."""
+    lab, aff = _gm_block()
+    custom = (2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)   # some reordered tissue hierarchy
+    r = apply_seeg_to_label(lab, aff, _spec(),
+                            elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET,
+                            hierarchy=custom)
+    assert r.hierarchy == (13, 14, 15, 16, *custom)
+    # falsy/None still yields the native electrode-first default
+    r2 = apply_seeg_to_label(lab, aff, _spec(),
+                             elem_sizes=CHARM_ELEM, facet_distances=CHARM_FACET,
+                             hierarchy=False)
+    assert r2.hierarchy == _HIERARCHY

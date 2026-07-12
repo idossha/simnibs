@@ -53,6 +53,7 @@ def _cmd_conforming(args: argparse.Namespace) -> int:
         contact_sigma=args.contact_sigma,
         shaft_sigma=args.shaft_sigma,
         sheath_sigma=args.sheath_sigma,
+        fibrous_sheath_sigma=args.fibrous_sheath_sigma,
     )
     res = {"standard": CONF_STANDARD, "fine": CONF_FINE, "ultra": CONF_ULTRA}[args.preset]
     over = {}
@@ -128,10 +129,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="whole-head label voxel = electrode geometric fidelity")
     pc.add_argument("--electrode-edge-mm", type=float, default=None,
                     help="target tet/facet size at the electrode")
-    pc.add_argument("--mesher", choices=["image2mesh", "create_mesh"], default="image2mesh")
+    pc.add_argument("--mesher", choices=["create_mesh", "image2mesh"], default="create_mesh",
+                    help="create_mesh (default, native-quality head, solver-ready) | "
+                         "image2mesh (faster/low-RAM raw CGAL, non-native head)")
     pc.add_argument("--contact-sigma", type=float, default=SEEGMaterials().contact_sigma)
     pc.add_argument("--shaft-sigma", type=float, default=SEEGMaterials().shaft_sigma)
-    pc.add_argument("--sheath-sigma", type=float, default=SEEGMaterials().sheath_sigma)
+    pc.add_argument("--sheath-sigma", type=float, default=SEEGMaterials().sheath_sigma,
+                    help="glial sheath sigma (brain GM/WM), S/m")
+    pc.add_argument("--fibrous-sheath-sigma", type=float,
+                    default=SEEGMaterials().fibrous_sheath_sigma,
+                    help="fibrous sheath sigma (bone/scalp/soft-tissue tract), S/m")
     pc.add_argument("--catalog", default=None)
     pc.add_argument("--num-threads", type=int, default=8)
     pc.add_argument("--out", required=True)

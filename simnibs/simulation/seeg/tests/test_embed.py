@@ -11,7 +11,7 @@ import pytest
 
 from simnibs.simulation.seeg import (
     SEEGLead, ConformingResolution, CONF_FINE, CONF_STANDARD, CONF_ULTRA,
-    SEEG_CONTACT, SEEG_SHAFT, GLIAL_SHEATH,
+    SEEG_CONTACT, SEEG_SHAFT, GLIAL_SHEATH, FIBROUS_SHEATH,
 )
 from simnibs.simulation.seeg import _raster
 from simnibs.simulation.seeg.catalog import ElectrodeCatalog
@@ -77,19 +77,32 @@ def test_paint_full_encapsulation_no_bare_gm_wm():
     assert int((nb & np.isin(out, list(range(1, 13))) & (out != 15)).sum()) == 0
 
 
-def test_paint_sheath_grows_in_all_tissue_by_default():
-    lab, aff = _block()
-    lab[:] = np.where(lab == 2, 4, lab)                    # bone everywhere
+def test_paint_segmented_sheath_tags_by_host():
+    """The sheath is host-keyed: glial (15) in brain, fibrous (16) in bone, none in CSF."""
     lead = SEEGLead("T", "BF10R-SP21X-0C3", entry_mm=(12, 0, 0), target_mm=(-12, 0, 0), n_contacts=5)
-    # default: sheath wraps the electrode even through bone ("around it all")
-    _, counts = _raster.paint_leads_into_label(lab, aff, [lead], ElectrodeCatalog.default(), 0.15)
-    assert counts[GLIAL_SHEATH] > 0
-    assert counts[SEEG_CONTACT] > 0
-    # restrict: sheath_tags=(1,2,3) -> no sheath when only bone is present
-    _, counts_b = _raster.paint_leads_into_label(
-        lab, aff, [lead], ElectrodeCatalog.default(), 0.15, sheath_tags=(1, 2, 3))
-    assert counts_b[GLIAL_SHEATH] == 0
-    assert counts_b[SEEG_CONTACT] > 0
+    cat = ElectrodeCatalog.default()
+
+    # brain (GM) -> glial sheath only
+    lab, aff = _block(); lab[:] = 2
+    _, c_gm = _raster.paint_leads_into_label(lab, aff, [lead], cat, 0.15)
+    assert c_gm[GLIAL_SHEATH] > 0 and c_gm[FIBROUS_SHEATH] == 0
+
+    # bone -> fibrous sheath only (the through-skull shunt), never glial
+    lab, aff = _block(); lab[:] = 4
+    _, c_bone = _raster.paint_leads_into_label(lab, aff, [lead], cat, 0.15)
+    assert c_bone[FIBROUS_SHEATH] > 0 and c_bone[GLIAL_SHEATH] == 0
+    assert c_bone[SEEG_CONTACT] > 0
+
+    # CSF -> no sheath at all (bare shaft), but the electrode body is still painted
+    lab, aff = _block(); lab[:] = 3
+    _, c_csf = _raster.paint_leads_into_label(lab, aff, [lead], cat, 0.15)
+    assert c_csf[GLIAL_SHEATH] == 0 and c_csf[FIBROUS_SHEATH] == 0
+    assert c_csf[SEEG_CONTACT] > 0 and c_csf[SEEG_SHAFT] > 0
+
+    # explicit override: a custom map can force sheath even in CSF
+    _, c_map = _raster.paint_leads_into_label(
+        lab, aff, [lead], cat, 0.15, sheath_tag_map={3: GLIAL_SHEATH})
+    assert c_map[GLIAL_SHEATH] > 0
 
 
 def test_resample_iso_alignment():

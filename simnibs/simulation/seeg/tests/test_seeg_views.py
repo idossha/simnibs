@@ -29,6 +29,17 @@ def _fake_mesh():
     return types.SimpleNamespace(elm=elm, nodes=nodes)
 
 
+def _fake_mesh_with_sheath():
+    # like _fake_mesh but with one sheath (1015) triangle so the sheath view is emitted
+    coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], float)
+    nlist = np.array([[1, 2, 3, -1]])
+    tag1 = np.array([1015])
+    etype = np.array([2])
+    elm = types.SimpleNamespace(tag1=tag1, elm_type=etype, node_number_list=nlist)
+    nodes = types.SimpleNamespace(node_coord=coords)
+    return types.SimpleNamespace(elm=elm, nodes=nodes)
+
+
 def test_write_pos_skips_empty_structures(tmp_path):
     fn = str(tmp_path / "v.pos")
     written = write_seeg_view_pos(_fake_mesh(), fn)
@@ -49,11 +60,24 @@ def test_add_seeg_views_styles_and_merges(tmp_path):
     assert contact.indx == 0 and shaft.indx == 1
     assert contact.ColorTable[0][:3] == [154, 154, 154]
     assert shaft.ColorTable[0][:3] == [71, 71, 71]
-    assert contact.ColormapAlpha == 1.0
-    # ColorTable must be the LAST emitted line (else ColormapAlpha wipes it -> red)
+    # opacity is baked into the ColorTable alpha channel (not ColormapAlpha, which the
+    # ColorTable-last emission would wipe); opaque structures -> alpha 255
+    assert contact.ColorTable[0][3] == 255
+    assert not hasattr(contact, "ColormapAlpha")
+    # ColorTable must be the LAST emitted line (else a later colormap op wipes it -> red)
     lines = [l for l in str(contact).strip().split("\n") if l]
     assert lines[-1].startswith("View[0].ColorTable")
-    assert str(contact).index("ColormapAlpha") < str(contact).index("ColorTable")
+
+
+def test_add_seeg_views_bakes_sheath_transparency(tmp_path):
+    fn_mesh = str(tmp_path / "head.msh")
+    vis = types.SimpleNamespace(merge=[], View=[])
+    add_seeg_views(vis, _fake_mesh_with_sheath(), fn_mesh)
+    assert len(vis.View) == 1
+    sheath = vis.View[0]
+    # the sheath's 50% opacity is baked into the ColorTable alpha (0.5 -> 128), so it renders
+    assert sheath.ColorTable[0][:3] == [162, 32, 242]
+    assert sheath.ColorTable[0][3] == 128
 
 
 def test_add_seeg_views_indices_start_after_existing(tmp_path):

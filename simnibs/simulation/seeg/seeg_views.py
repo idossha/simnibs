@@ -1,10 +1,10 @@
 """Gmsh visualization for the sEEG structures (contact / shaft / glial sheath).
 
-When a head is built with ``charm --seeg`` the three sEEG compartments (element tags
-13/14/15, surface tags 1013/1014/1015) are just tissues in the mesh — Gmsh would draw
-them with an arbitrary physical-group colour and no way to isolate them. This module adds
-a dedicated, individually-toggleable **Gmsh View** per structure with a fixed colour, so
-the electrode reads clearly against the tissue:
+When a head is built with ``charm --seeg`` the sEEG compartments (element tags 13-16,
+surface tags 1013-1016) are just tissues in the mesh — Gmsh would draw them with an
+arbitrary physical-group colour and no way to isolate them. This module adds a dedicated,
+individually-toggleable **Gmsh View** per structure with a fixed colour, so the electrode
+reads clearly against the tissue:
 
 ======================  ==================  =========
 structure (surface tag)  colour              opacity
@@ -12,6 +12,7 @@ structure (surface tag)  colour              opacity
 SEEG_contact (1013)      medium grey 154     opaque
 SEEG_shaft   (1014)      dark grey   71       opaque
 Glial_sheath (1015)      purple 162,32,242    50 %
+Fibrous_sheath (1016)    tan 205,164,106      50 %
 ======================  ==================  =========
 
 The colours are deliberately outside the "heat" field colormap so the electrode never
@@ -21,7 +22,7 @@ for its electrode/scalp views), so the multi-GB head mesh itself is not bloated.
 
 ``add_seeg_views`` is called automatically from the charm mesh step when ``--seeg`` is
 supplied (see ``segmentation/charm_main``); it is also usable on any solved result mesh
-that carries tags 1013/1014/1015.
+that carries tags 1013-1016.
 """
 
 from __future__ import annotations
@@ -31,10 +32,13 @@ import os
 import numpy as np
 
 # (surface_tag, view_name, (R, G, B), alpha) -- names match the mesh physical groups.
+# Colours are deliberately outside the E-field "heat" colormap; the two sheaths are visually
+# distinct (glial = purple, fibrous = tan) so the segmented compartments read apart.
 SEEG_VIEW_SPEC = [
     (1013, "SEEG_contact", (154, 154, 154), 1.0),
     (1014, "SEEG_shaft", (71, 71, 71), 1.0),
     (1015, "Glial_sheath", (162, 32, 242), 0.5),
+    (1016, "Fibrous_sheath", (205, 164, 106), 0.5),
 ]
 
 _TRIANGLE = 2  # Gmsh element type for a 3-node triangle
@@ -43,7 +47,7 @@ _TRIANGLE = 2  # Gmsh element type for a 3-node triangle
 def write_seeg_view_pos(mesh, fn_pos) -> list[tuple[str, tuple[int, int, int], float]]:
     """Write a Gmsh ``.pos`` with one flat scalar-triangle view per sEEG structure.
 
-    Each view contains only that structure's *surface* triangles (tag 1013/1014/1015) with
+    Each view contains only that structure's *surface* triangles (tag 1013-1016) with
     a constant scalar, so a solid ``ColorTable`` renders it as one flat colour. Structures
     absent from the mesh are skipped. Returns the ordered list of ``(name, rgb, alpha)``
     actually written (so the caller can style exactly those views, in order).
@@ -72,14 +76,21 @@ def write_seeg_view_pos(mesh, fn_pos) -> list[tuple[str, tuple[int, int, int], f
     return written
 
 
-def _solid_color_table(rgb: tuple[int, int, int]) -> list[list[int]]:
-    """A 2-entry RGBA ColorTable of a single colour (flat fill for a constant field)."""
-    entry = [int(rgb[0]), int(rgb[1]), int(rgb[2]), 255]
+def _solid_color_table(rgb: tuple[int, int, int], alpha: float = 1.0) -> list[list[int]]:
+    """A 2-entry RGBA ColorTable of a single colour (flat fill for a constant field).
+
+    The opacity is baked into the table's alpha channel. This is deliberate: Gmsh's
+    ``ColormapAlpha`` only tints the colormap *when it is (re)generated*, and a direct
+    ``ColorTable`` assignment (emitted last) overrides that regeneration -- so the sheath's
+    50 % transparency has to live in the ColorTable itself, not in ColormapAlpha, to render.
+    """
+    a = int(round(255 * max(0.0, min(1.0, alpha))))
+    entry = [int(rgb[0]), int(rgb[1]), int(rgb[2]), a]
     return [entry, list(entry)]
 
 
 def add_seeg_views(vis, mesh, fn_mesh):
-    """Add the three sEEG structure views to a ``gmsh_view.Visualization``.
+    """Add the sEEG structure views (contact, shaft, glial + fibrous sheath) to a ``gmsh_view.Visualization``.
 
     Writes ``<mesh>_seeg_views.pos`` next to ``fn_mesh``, registers it as a ``Merge`` in
     ``vis``, and appends one styled :class:`~simnibs.mesh_tools.gmsh_view.View` per structure
@@ -112,8 +123,9 @@ def add_seeg_views(vis, mesh, fn_mesh):
                 CustomMin=0,
                 CustomMax=1,
                 SaturateValues=1,
-                ColormapAlpha=float(alpha),
-                ColorTable=_solid_color_table(rgb),
+                # alpha is baked into the ColorTable (see _solid_color_table); ColormapAlpha
+                # would be wiped by the ColorTable-last emission and is intentionally omitted.
+                ColorTable=_solid_color_table(rgb, alpha),
             )
         )
     return vis

@@ -2,13 +2,15 @@
 
 This is the *single* integration point between the sEEG module and the standard charm
 pipeline (``segmentation/charm_main.run``). It is a no-op unless the user supplies a
-``--seeg <spec.json>`` file: charm then paints the three sEEG compartments -- metallic
-contact (tag 13), insulating shaft (tag 14) and glial sheath (tag 15) -- into charm's own
-upsampled tissue-label image *before* ``create_mesh`` runs, and augments charm's meshing
-settings with a fine element size for those tags. Everything else in charm is unchanged, so
-the head stays native SimNIBS quality and the electrodes are just an extra, optional layer.
+``--seeg <spec.json>`` file: charm then paints the sEEG compartments -- metallic contact
+(tag 13), insulating shaft (tag 14) and the host-keyed peri-electrode sheath (glial sheath 15
+in brain GM/WM, fibrous sheath 16 in the bone/scalp/soft-tissue tract; bare in CSF) -- into
+charm's own upsampled tissue-label image *before* ``create_mesh`` runs, and augments charm's
+meshing settings with a fine element size for those tags. Everything else in charm is
+unchanged, so the head stays native SimNIBS quality and the electrodes are just an extra,
+optional layer.
 
-The three tags live in the free tissue band of ``ElementTags`` (< 100), so the standard
+The four tags live in the free tissue band of ``ElementTags`` (< 100), so the standard
 solver / ``cond_utils.standard_cond`` treat them as ordinary tissues -- no solver changes.
 
 Off by default (``seeg=None``); on only when electrode locations are supplied.
@@ -25,21 +27,28 @@ import numpy as np
 
 from ._params import (
     SEEG_TAGS,
+    SEEG_HIERARCHY,
     SEEGMaterials,
     ConformingResolution,
     CONF_FINE,
+    augment_electrode_sizes,
+    sheath_paint_warnings,
 )
 from .catalog import ElectrodeCatalog
 from .geometry import SEEGLead
-from .conductivity import ensure_seeg_registered
+from .conductivity import ensure_seeg_registered, build_seeg_cond_list
 from . import _raster
 
 logger = logging.getLogger("simnibs.seeg")
 
-# Electrode-first hierarchy so the electrode/tissue interface keeps a clean 1013/1014/1015
-# shell. Identical to meshing.create_mesh's native default with 13/14/15 prepended, so the
-# ordering of every non-electrode tissue is untouched.
-_HIERARCHY = (13, 14, 15, 1, 2, 9, 3, 4, 8, 7, 6, 11, 10, 12, 5)
+# Grey-matter conductivity (tag 2) -- the resistive-sheath enhancement mechanism assumes the
+# sheath stays *below* GM; used only to warn when sub-voxel sigma-scaling pushes it above.
+_GM_SIGMA = 0.275
+
+# Electrode-first hierarchy so the electrode/tissue interface keeps a clean 1013-1016 shell.
+# Single source of truth in _params (== meshing.create_mesh's native default with the sEEG
+# tags 13-16 prepended); aliased here for back-compat with importers/tests.
+_HIERARCHY = SEEG_HIERARCHY
 
 
 @dataclass
@@ -110,6 +119,9 @@ def load_seeg_spec(spec) -> SeegSpec:
         contact_sigma=float(m.get("contact_sigma", SEEGMaterials.contact_sigma)),
         shaft_sigma=float(m.get("shaft_sigma", SEEGMaterials.shaft_sigma)),
         sheath_sigma=float(m.get("sheath_sigma", SEEGMaterials.sheath_sigma)),
+        fibrous_sheath_sigma=float(
+            m.get("fibrous_sheath_sigma", SEEGMaterials.fibrous_sheath_sigma)
+        ),
     )
 
     resolution = ConformingResolution(
@@ -148,7 +160,15 @@ class SeegHookResult:
     warnings: list[str] = field(default_factory=list)
 
     def sidecar(self) -> dict:
-        """JSON-serialisable summary written next to the mesh for provenance."""
+        """JSON-serialisable summary written next to the mesh for provenance.
+
+        ``cond_list`` is the ready-to-use, ``cond_list[tag-1]``-indexed conductivity vector
+        for the stock solver, carrying the *resolved* sEEG conductivities (including any
+        thin-shell sigma up-scaling). Feed it to run_simnibs via
+        :func:`~simnibs.simulation.seeg.conductivity.load_seeg_cond_list` so the spec's sheath
+        conductivity actually reaches the solve -- ``standard_cond()`` alone would fall back to
+        the static registry value and silently ignore both the per-spec sigma and the scaling.
+        """
         return {
             "leads": [
                 {
@@ -162,6 +182,7 @@ class SeegHookResult:
             ],
             "sheath_thickness_mm": self.sheath_thickness_mm,
             "materials": self.materials.as_tag_map(),
+            "cond_list": build_seeg_cond_list(materials=self.materials),
             "voxel_counts": {int(k): int(v) for k, v in self.voxel_counts.items()},
             "warnings": self.warnings,
         }
@@ -176,7 +197,7 @@ def apply_seeg_to_label(
     facet_distances: dict,
     hierarchy=None,
     displace_tags: tuple[int, ...] | None = None,
-    sheath_tags: tuple[int, ...] | None = None,
+    sheath_tag_map: dict[int, int] | None = None,
 ) -> SeegHookResult:
     """Paint sEEG compartments into charm's cropped label and return updated mesh inputs.
 
@@ -189,16 +210,21 @@ def apply_seeg_to_label(
         a :class:`SeegSpec`, a path to a ``--seeg`` JSON, or a spec dict.
     elem_sizes, facet_distances
         charm's own meshing settings (``settings['mesh']``); returned augmented with a fine
-        entry for tags 13/14/15 (charm's tissue entries are left untouched, so the head is
-        meshed exactly as native SimNIBS -- only the electrode is finely sized).
+        entry for the sEEG tags 13-16 (charm's tissue entries are left untouched, so the head
+        is meshed exactly as native SimNIBS -- only the electrode is finely sized).
+    sheath_tag_map
+        host tissue -> sheath tag (segmented sheath); default ``_params.SHEATH_TAG_BY_HOST``
+        (brain -> glial 15, bone/scalp/soft -> fibrous 16, CSF/blood -> bare).
     hierarchy
-        charm's hierarchy setting (usually ``False``/``None`` -> native default); replaced by
-        the electrode-first hierarchy so the electrode surfaces win twin facets.
+        charm's hierarchy setting (usually ``False``/``None`` -> native default). The three
+        electrode tags are prepended so the electrode surfaces win twin facets; if charm
+        passes a non-empty custom order it is preserved *after* the electrode tags rather
+        than dropped.
 
     Returns
     -------
     SeegHookResult with the upsampled/painted label, the augmented settings and provenance.
-    The three sEEG conductivities are registered via ``ensure_seeg_registered`` so the stock
+    The four sEEG conductivities are registered via ``ensure_seeg_registered`` so the stock
     solver picks them up.
     """
     if not isinstance(spec, SeegSpec):
@@ -232,37 +258,45 @@ def apply_seeg_to_label(
     if 0.0 < sheath_mm < dv:
         paint_sheath_mm = float(dv)
         scale = paint_sheath_mm / sheath_mm
-        materials = SEEGMaterials(
-            contact_sigma=materials.contact_sigma,
-            shaft_sigma=materials.shaft_sigma,
-            sheath_sigma=materials.sheath_sigma * scale,  # keep sheet resistance t/sigma
-        )
+        materials = materials.with_scaled_sheath(scale)  # keep both shells' sheet resistance t/sigma
         msg = (f"sheath {sheath_mm * 1000:.0f} um < voxel {dv * 1000:.0f} um: meshed at 1 "
                f"voxel with sigma x{scale:.2f} (preserves t/sigma). Use a finer "
                f"label_voxel_mm for a true-thickness sheath.")
         logger.warning(msg); warnings.append(msg)
+        # The near-contact enhancement relies on a RESISTIVE shell (sheath sigma < GM). If the
+        # thin-shell up-scaling pushes it above GM, the thickened shell instead shorts current
+        # tangentially and blunts the very effect it models -- warn so the user drops the voxel.
+        if materials.sheath_sigma >= _GM_SIGMA:
+            msg = (f"scaled sheath sigma {materials.sheath_sigma:.3f} S/m >= GM {_GM_SIGMA} "
+                   f"S/m: the thickened shell is no longer resistive and will blunt the "
+                   f"near-contact enhancement. Use a finer label_voxel_mm (>=2 voxels across "
+                   f"the sheath) so no sigma up-scaling is needed.")
+            logger.warning(msg); warnings.append(msg)
 
     # --- paint the electrodes into the real tissue label (no background block) ---
     label, vox_counts = _raster.paint_leads_into_label(
         label, affine, spec.leads, catalog, paint_sheath_mm,
-        displace_tags=displace_tags, sheath_tags=sheath_tags,
+        displace_tags=displace_tags, sheath_tag_map=sheath_tag_map,
     )
     logger.info("sEEG: painted voxels %s", vox_counts)
-    for tag in SEEG_TAGS:
-        if vox_counts.get(tag, 0) == 0:
-            msg = f"tag {tag} got 0 voxels (electrode outside tissue or thinner than a voxel)"
-            logger.warning(msg); warnings.append(msg)
+    for msg in sheath_paint_warnings(vox_counts):
+        logger.warning(msg); warnings.append(msg)
 
     label = label.astype(np.uint16 if label.max() >= 256 else np.uint8)
 
     # --- augment charm's meshing settings with a fine electrode; tissues untouched ---
     el = dict(elem_sizes)
     fd = dict(facet_distances)
-    e = float(resolution.electrode_edge_mm)
-    fdm = float(resolution.electrode_facet_distance_mm)
-    for tag in ("13", "14", "15"):
-        el[tag] = {"range": [e, e], "slope": 1.0}
-        fd[tag] = {"range": [fdm, fdm], "slope": 1.0}
+    augment_electrode_sizes(
+        el, fd,
+        float(resolution.electrode_edge_mm),
+        float(resolution.electrode_facet_distance_mm),
+    )
+
+    # --- electrode-first hierarchy, preserving any custom order charm passed in ---
+    # Prepend the sEEG tags so their surfaces win twin facets; keep the caller's tissue order
+    # when one was supplied (charm's default is falsy -> the native SEEG_HIERARCHY).
+    resolved_hierarchy = SEEG_HIERARCHY if not hierarchy else (*SEEG_TAGS, *hierarchy)
 
     # --- register conductivities for the stock solver ---
     ensure_seeg_registered(materials)
@@ -272,7 +306,7 @@ def apply_seeg_to_label(
         label_affine=affine,
         elem_sizes=el,
         facet_distances=fd,
-        hierarchy=_HIERARCHY,
+        hierarchy=resolved_hierarchy,
         materials=materials,
         leads=list(spec.leads),
         sheath_thickness_mm=sheath_mm,

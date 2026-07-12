@@ -145,7 +145,10 @@ def extract_axis_fields(
         e1, e2 = _perp_frame(u)
         centers = placement.contact_centers[lead.name]
         n_contacts = centers.shape[0]
-        r_c = spec.contact_radius_mm
+        # the painted rod (metal + shaft) extends to the constant OUTER body radius, so samples
+        # must start outside body_radius (== contact_radius for a flush-macro part) to read the
+        # tissue/sheath field rather than land inside the conductor for any body_dia > contact_dia.
+        r_c = spec.body_radius_mm
         r_off = r_c + max(2 * grid_step_mm, 0.1)  # axial line just outside the body
 
         # --- assemble ALL sample points for this lead, then one interpolation ---
